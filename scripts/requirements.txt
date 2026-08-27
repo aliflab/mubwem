@@ -1,0 +1,2 @@
+# Local tooling for scripts/ (not needed for cdk deploy itself).
+boto3>=1.34.0

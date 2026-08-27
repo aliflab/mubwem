@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Status</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%2316a34a'/></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>MuBWeM</h1>
+          <p class="tagline">Multi-Brand Website Monitor</p>
+        </div>
+      </div>
+      <div class="meta">
+        <div id="overall" class="overall">Loading…</div>
+        <div class="updated">Updated <span id="updated">—</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="error" class="error" hidden></div>
+    <section id="cards" class="cards" aria-live="polite"></section>
+    <p id="empty" class="empty" hidden>
+      No sites are being monitored yet. Seed the Sites table with
+      <code>scripts/seed_sites.py</code>.
+    </p>
+  </main>
+
+  <footer>
+    <span>Checks run every minute from ap-southeast-2 · Dashboard refreshes every 20s</span>
+  </footer>
+
+  <!-- Generated at deploy time by the CDK stack; sets window.MUBWEM_API_URL. -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

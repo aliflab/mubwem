@@ -212,23 +212,20 @@ def _response(status_code, body):
 
 
 def _is_public_request(event):
-    """True for GET /public/status, on either payload shape API Gateway sends.
-
-    Both routes hit this one function, and the authorizer - not this code - is
-    what keeps /status private. Getting this wrong can only ever show *less*
-    than the caller is entitled to, never more.
+    """True unless this is confidently identified as the authenticated /status
+    route. Any ambiguity in event shape defaults to public (the restrictive,
+    less-data branch), since the failure mode here must never expose more than
+    an unauthenticated caller is entitled to.
     """
     route_key = (event or {}).get("routeKey") or ""
-    if route_key.endswith(" " + PUBLIC_PATH):
-        return True
-
+    if route_key.endswith(" " + PRIVATE_PATH):
+        return False
     path = (event or {}).get("rawPath") or ""
     if not path:
         path = (
             (event or {}).get("requestContext", {}).get("http", {}).get("path", "")
         )
-    # Tolerates a stage prefix, e.g. /$default/public/status.
-    return path.rstrip("/").endswith(PUBLIC_PATH)
+    return not path.rstrip("/").endswith(PRIVATE_PATH)
 
 
 def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda

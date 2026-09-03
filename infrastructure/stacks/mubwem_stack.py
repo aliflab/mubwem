@@ -9,6 +9,11 @@ Single CDK stack containing the whole Phase 1 (free tier) system:
   CloudFront -> S3 (static dashboard), which fetches
   API Gateway HTTP API -> API Lambda -> DynamoDB
 
+The dashboard is login-gated by a Cognito user pool (admin-created users
+only, no self-signup) and GET /status sits behind a JWT authorizer. Sites
+flagged isPublic are also served unauthenticated on GET /public/status, for
+the shareable status page.
+
 Every environment-specific value (alert email, failure threshold, retention)
 arrives as CDK context, so this stack can be redeployed into any account
 without editing code.
@@ -20,13 +25,16 @@ from aws_cdk import (
     Aws,
     CfnOutput,
     Duration,
+    Fn,
     RemovalPolicy,
     Stack,
 )
 from aws_cdk import aws_apigatewayv2 as apigwv2
 from aws_cdk import aws_apigatewayv2_integrations as apigw_integrations
+from aws_cdk import aws_apigatewayv2_authorizers as apigw_authorizers
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
+from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
@@ -184,6 +192,112 @@ class MubwemStack(Stack):
         )
 
         # ------------------------------------------------------------------
+        # Cognito user pool - the dashboard login
+        # ------------------------------------------------------------------
+        # No self-signup: users are created by an operator with
+        # `aws cognito-idp admin-create-user` (see the README).
+        user_pool = cognito.UserPool(
+            self,
+            "UserPool",
+            user_pool_name="mubwem-users",
+            self_sign_up_enabled=False,
+            sign_in_aliases=cognito.SignInAliases(email=True),
+            sign_in_case_sensitive=False,
+            standard_attributes=cognito.StandardAttributes(
+                email=cognito.StandardAttribute(required=True, mutable=True)
+            ),
+            auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            password_policy=cognito.PasswordPolicy(
+                min_length=8,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=False,
+            ),
+            account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            # Same teardown stance as the tables: users go with the stack.
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # A Cognito-managed domain - no custom domain, no certificate to manage.
+        # The prefix has to be globally unique, so it defaults to the first
+        # segment of this stack's CloudFormation id: unique per deployment and,
+        # unlike the account id, nothing anyone needs to keep quiet. Override
+        # with `-c cognitoDomainPrefix=something-unique`.
+        cognito_domain_prefix = self.node.try_get_context("cognitoDomainPrefix") or (
+            "mubwem-"
+            + Fn.select(0, Fn.split("-", Fn.select(2, Fn.split("/", self.stack_id))))
+        )
+        user_pool_domain = user_pool.add_domain(
+            "UserPoolDomain",
+            cognito_domain=cognito.CognitoDomainOptions(
+                domain_prefix=cognito_domain_prefix
+            ),
+        )
+
+        # ------------------------------------------------------------------
+        # Frontend: private S3 bucket behind CloudFront (origin access control)
+        # ------------------------------------------------------------------
+        # Built before the user pool client, whose callback URL is the
+        # CloudFront domain. The distribution knows nothing about Cognito, so
+        # the dependency only runs one way and there is no cycle.
+        site_bucket = s3.Bucket(
+            self,
+            "FrontendBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
+        distribution = cloudfront.Distribution(
+            self,
+            "FrontendDistribution",
+            default_root_object="index.html",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3BucketOrigin.with_origin_access_control(site_bucket),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+            ),
+            comment="MuBWeM dashboard",
+            price_class=cloudfront.PriceClass.PRICE_CLASS_100,
+        )
+
+        dashboard_url = "https://" + distribution.domain_name
+        # Trailing slash: CloudFront serves index.html at "/", and the redirect
+        # URI the browser sends has to match a callback URL character for
+        # character.
+        redirect_uri = dashboard_url + "/"
+
+        # Public client - a static page cannot keep a secret, so there is none.
+        # Authorization code + PKCE is what the frontend actually runs.
+        user_pool_client = user_pool.add_client(
+            "DashboardClient",
+            user_pool_client_name="mubwem-dashboard",
+            generate_secret=False,
+            prevent_user_existence_errors=True,
+            auth_flows=cognito.AuthFlow(user_srp=True),
+            supported_identity_providers=[
+                cognito.UserPoolClientIdentityProvider.COGNITO
+            ],
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(
+                    authorization_code_grant=True,
+                    implicit_code_grant=False,
+                ),
+                scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+                callback_urls=[redirect_uri],
+                logout_urls=[redirect_uri],
+            ),
+            id_token_validity=Duration.hours(1),
+            access_token_validity=Duration.hours(1),
+            # No refresh token is kept in the browser; the hosted UI session
+            # cookie is what makes re-login silent when the id token expires.
+            refresh_token_validity=Duration.days(1),
+        )
+
+        # ------------------------------------------------------------------
         # API Lambda + HTTP API
         # ------------------------------------------------------------------
         api_fn = lambda_.Function(
@@ -214,58 +328,69 @@ class MubwemStack(Stack):
             api_name="mubwem-status-api",
             cors_preflight=apigwv2.CorsPreflightOptions(
                 # The dashboard is served from a CloudFront domain that only
-                # exists after this stack deploys, and the endpoint is a
-                # read-only public status feed, so any origin may read it.
+                # exists after this stack deploys, so the origin cannot be
+                # pinned here. /status is protected by the JWT authorizer
+                # rather than by CORS; /public/status is deliberately open.
                 allow_origins=["*"],
                 allow_methods=[apigwv2.CorsHttpMethod.GET],
-                allow_headers=["content-type"],
+                allow_headers=["content-type", "authorization"],
             ),
         )
+
+        # Validates the Cognito id token in the Authorization header against
+        # this user pool's issuer URL and this client id.
+        dashboard_authorizer = apigw_authorizers.HttpUserPoolAuthorizer(
+            "DashboardAuthorizer",
+            user_pool,
+            user_pool_clients=[user_pool_client],
+            identity_source=["$request.header.Authorization"],
+        )
+
+        # Authenticated: every site, full detail.
         http_api.add_routes(
             path="/status",
             methods=[apigwv2.HttpMethod.GET],
             integration=apigw_integrations.HttpLambdaIntegration(
                 "StatusIntegration", api_fn
             ),
+            authorizer=dashboard_authorizer,
         )
 
-        # ------------------------------------------------------------------
-        # Frontend: private S3 bucket behind CloudFront (origin access control)
-        # ------------------------------------------------------------------
-        site_bucket = s3.Bucket(
-            self,
-            "FrontendBucket",
-            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            encryption=s3.BucketEncryption.S3_MANAGED,
-            enforce_ssl=True,
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-        )
-
-        distribution = cloudfront.Distribution(
-            self,
-            "FrontendDistribution",
-            default_root_object="index.html",
-            default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin.with_origin_access_control(site_bucket),
-                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        # Unauthenticated: only sites flagged isPublic. Same Lambda, which
+        # branches on the request path - one function, one set of grants.
+        http_api.add_routes(
+            path="/public/status",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=apigw_integrations.HttpLambdaIntegration(
+                "PublicStatusIntegration", api_fn
             ),
-            comment="MuBWeM dashboard",
-            price_class=cloudfront.PriceClass.PRICE_CLASS_100,
         )
 
+        # ------------------------------------------------------------------
+        # Frontend deployment
+        # ------------------------------------------------------------------
         # Ship the static dashboard, plus a generated config.js carrying the API
-        # URL, so no endpoint is ever hardcoded in committed frontend code.
+        # URLs and Cognito client details, so no endpoint, domain or client id is
+        # ever hardcoded in committed frontend code.
+        config_js = "\n".join(
+            [
+                'window.MUBWEM_API_URL = "%s/status";' % http_api.api_endpoint,
+                'window.MUBWEM_PUBLIC_API_URL = "%s/public/status";'
+                % http_api.api_endpoint,
+                'window.MUBWEM_COGNITO_DOMAIN = "%s";' % user_pool_domain.base_url(),
+                'window.MUBWEM_COGNITO_CLIENT_ID = "%s";'
+                % user_pool_client.user_pool_client_id,
+                'window.MUBWEM_REDIRECT_URI = "%s";' % redirect_uri,
+                "",
+            ]
+        )
+
         s3_deploy.BucketDeployment(
             self,
             "FrontendDeployment",
             sources=[
                 s3_deploy.Source.asset(os.path.join(REPO_ROOT, "frontend")),
-                s3_deploy.Source.data(
-                    "config.js",
-                    'window.MUBWEM_API_URL = "%s/status";\n' % http_api.api_endpoint,
-                ),
+                s3_deploy.Source.data("config.js", config_js),
             ],
             destination_bucket=site_bucket,
             distribution=distribution,
@@ -275,7 +400,22 @@ class MubwemStack(Stack):
         # ------------------------------------------------------------------
         # Outputs
         # ------------------------------------------------------------------
-        CfnOutput(self, "DashboardUrl", value="https://" + distribution.domain_name)
+        CfnOutput(self, "DashboardUrl", value=dashboard_url)
         CfnOutput(self, "ApiUrl", value=http_api.api_endpoint + "/status")
+        CfnOutput(self, "PublicApiUrl", value=http_api.api_endpoint + "/public/status")
         CfnOutput(self, "SitesTableName", value=sites_table.table_name)
         CfnOutput(self, "AlertTopicArn", value=alert_topic.topic_arn)
+        CfnOutput(
+            self,
+            "CognitoLoginUrl",
+            value=user_pool_domain.sign_in_url(
+                user_pool_client, redirect_uri=redirect_uri
+            ),
+            description="Hosted UI login URL for the dashboard",
+        )
+        CfnOutput(
+            self,
+            "CognitoUserPoolId",
+            value=user_pool.user_pool_id,
+            description="Pass to `aws cognito-idp admin-create-user --user-pool-id`",
+        )

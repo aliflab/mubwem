@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Public status</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%232563eb'/></svg>">
+</head>
+<body class="public">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Service status</h1>
+          <p class="tagline">Public status page</p>
+        </div>
+      </div>
+      <div class="meta">
+        <div id="overall" class="overall">Loading…</div>
+        <div class="updated">Updated <span id="updated">—</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <p class="public-note">
+      This page shows only the services published for public viewing. The full
+      monitoring dashboard requires a sign-in.
+    </p>
+    <div id="error" class="error" hidden></div>
+    <section id="cards" class="cards" aria-live="polite"></section>
+    <p id="empty" class="empty" hidden>
+      No services are published publicly right now.
+    </p>
+  </main>
+
+  <footer>
+    <span>Checks run every minute from ap-southeast-2 · This page refreshes every 20s</span>
+  </footer>
+
+  <!-- Generated at deploy time by the CDK stack; this page uses only
+       window.MUBWEM_PUBLIC_API_URL from it. -->
+  <script src="config.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="public.js"></script>
+</body>
+</html>

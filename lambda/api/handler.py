@@ -1,7 +1,13 @@
 """MuBWeM status API Lambda.
 
-Behind an API Gateway HTTP API: GET /status returns everything the dashboard
-needs in one call, so the frontend does no joining of its own.
+Behind an API Gateway HTTP API, serving two routes from one function:
+
+  GET /status         authenticated (Cognito JWT authorizer) - every site
+  GET /public/status  unauthenticated - only sites with isPublic = true
+
+Both return everything the dashboard needs in one call, so the frontend does
+no joining of its own. The two responses have an identical shape; the public
+one simply carries fewer sites.
 
 Response shape (this is the contract the frontend consumes directly):
 
@@ -36,6 +42,9 @@ Response shape (this is the contract the frontend consumes directly):
 
 Sites are sorted down-first, then by name, so the dashboard can render in
 order without sorting.
+
+The per-site `isPublic` flag is never echoed back on either route: it decides
+which sites /public/status includes, and nothing else.
 """
 
 import json
@@ -62,6 +71,9 @@ UPTIME_WINDOW_HOURS = 24
 # 24h at a 1-minute cadence is ~1440 rows; cap the paging so one wedged site
 # cannot stall the whole response.
 MAX_CHECK_PAGES = 4
+# Route path of the unauthenticated feed, as it arrives in the HTTP API
+# payload (rawPath / routeKey).
+PUBLIC_PATH = "/public/status"
 
 _dynamodb = boto3.resource(
     "dynamodb", config=Config(retries={"max_attempts": 3, "mode": "standard"})
@@ -142,8 +154,15 @@ def uptime_percent(site_id):
     return round(up * 100.0 / total, 2), total
 
 
-def build_payload():
+def build_payload(public_only=False):
+    """Assemble the whole status document.
+
+    public_only filters the site list *before* any per-site work, so a site the
+    caller will never see costs no UptimeChecks query and no Incidents query.
+    """
     sites = _scan_all(sites_table)
+    if public_only:
+        sites = [s for s in sites if s.get("isPublic") is True]
     statuses = {s["siteId"]: s for s in _scan_all(status_table)}
 
     entries = []
@@ -192,9 +211,32 @@ def _response(status_code, body):
     }
 
 
+def _is_public_request(event):
+    """True for GET /public/status, on either payload shape API Gateway sends.
+
+    Both routes hit this one function, and the authorizer - not this code - is
+    what keeps /status private. Getting this wrong can only ever show *less*
+    than the caller is entitled to, never more.
+    """
+    route_key = (event or {}).get("routeKey") or ""
+    if route_key.endswith(" " + PUBLIC_PATH):
+        return True
+
+    path = (event or {}).get("rawPath") or ""
+    if not path:
+        path = (
+            (event or {}).get("requestContext", {}).get("http", {}).get("path", "")
+        )
+    # Tolerates a stage prefix, e.g. /$default/public/status.
+    return path.rstrip("/").endswith(PUBLIC_PATH)
+
+
 def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda
+    public_only = _is_public_request(event)
     try:
-        return _response(200, build_payload())
+        return _response(200, build_payload(public_only=public_only))
     except Exception:  # noqa: BLE001 - always answer the dashboard with JSON
-        logger.exception("Failed to build status payload")
+        logger.exception(
+            "Failed to build status payload (public_only=%s)", public_only
+        )
         return _response(500, {"error": "internal error building status payload"})

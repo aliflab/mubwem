@@ -20,6 +20,10 @@
       <div class="meta">
         <div id="overall" class="overall">Loading…</div>
         <div class="updated">Updated <span id="updated">—</span></div>
+        <div class="session">
+          <span id="signed-in-as"></span>
+          <a href="#" id="logout" class="logout" hidden>Log out</a>
+        </div>
       </div>
     </div>
   </header>
@@ -35,10 +39,15 @@
 
   <footer>
     <span>Checks run every minute from ap-southeast-2 · Dashboard refreshes every 20s</span>
+    <span>·</span>
+    <a href="public.html">Public status page</a>
   </footer>
 
-  <!-- Generated at deploy time by the CDK stack; sets window.MUBWEM_API_URL. -->
+  <!-- Generated at deploy time by the CDK stack; sets the API URLs and the
+       Cognito domain, client id and redirect URI. -->
   <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="dashboard.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

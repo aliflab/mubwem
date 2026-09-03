@@ -74,6 +74,34 @@ body {
 
 .updated { font-size: 12px; color: var(--muted); }
 
+/* ------------------------------------------------------------------ session */
+.session { margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+#signed-in-as { margin-right: 8px; }
+
+.logout {
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.logout:hover { color: var(--text); }
+
+/* -------------------------------------------------------- public status page
+   Deliberately not the same page: blue mark, a different title, and a banner,
+   so it is obvious at a glance which view you are looking at. */
+.public .brand-mark { background: linear-gradient(135deg, #2563eb, #7c3aed); }
+
+.public-note {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* -------------------------------------------------------------------- main */
 main {
   max-width: 1100px;
@@ -233,3 +261,5 @@ footer {
   font-size: 12px;
   color: var(--muted);
 }
+
+footer a { color: var(--muted); }

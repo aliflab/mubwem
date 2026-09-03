@@ -4,6 +4,10 @@
 The table name is discovered from the deployed CloudFormation stack output
 (SitesTableName), so nothing about your account needs to live in this repo.
 
+Each site may carry "isPublic": true to appear on the unauthenticated public
+status page. It defaults to false, and a re-seed of a config that omits it
+leaves the table's existing value alone.
+
 Usage:
     python scripts/seed_sites.py                       # seed from config/config.json
     python scripts/seed_sites.py --dry-run             # show what would be written
@@ -106,13 +110,22 @@ def to_item(site, now_iso):
         "brand": str(site.get("brand", "Unassigned")),
         "checkIntervalSec": int(site.get("checkIntervalSec", 60)),
         "enabled": bool(site.get("enabled", True)),
+        # Opt-in: only sites flagged true appear on the unauthenticated
+        # /public/status feed and the shareable public.html page.
+        "isPublic": bool(site.get("isPublic", False)),
         # Preserved on re-seed by the conditional write below.
         "createdAt": now_iso,
     }
 
 
-def put_site(table, item):
-    """Write the site, keeping the original createdAt if the row already exists."""
+def put_site(table, item, keep_existing=()):
+    """Write the site, keeping the original createdAt if the row already exists.
+
+    keep_existing names attributes that must not be clobbered on an update when
+    the config did not set them explicitly - they are written only if the row
+    does not have them yet. That is how a site stays public across a re-seed of
+    a config that never mentions isPublic.
+    """
     try:
         table.put_item(
             Item=item,
@@ -124,9 +137,16 @@ def put_site(table, item):
             raise
 
     updatable = {k: v for k, v in item.items() if k not in ("siteId", "createdAt")}
+    assignments = []
+    for key in updatable:
+        if key in keep_existing:
+            assignments.append("#%s = if_not_exists(#%s, :%s)" % (key, key, key))
+        else:
+            assignments.append("#%s = :%s" % (key, key))
+
     table.update_item(
         Key={"siteId": item["siteId"]},
-        UpdateExpression="SET " + ", ".join("#%s = :%s" % (k, k) for k in updatable),
+        UpdateExpression="SET " + ", ".join(assignments),
         ExpressionAttributeNames={"#%s" % k: k for k in updatable},
         ExpressionAttributeValues={":%s" % k: v for k, v in updatable.items()},
     )
@@ -150,6 +170,9 @@ def main():
     sites = load_sites(args.config)
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     items = [to_item(s, now_iso) for s in sites]
+    # An entry that does not mention isPublic keeps whatever the table already
+    # says, exactly as createdAt is kept; spelling it out in the config wins.
+    keep_flags = [() if "isPublic" in site else ("isPublic",) for site in sites]
 
     if args.dry_run:
         print("Dry run — %d site(s) from %s:" % (len(items), args.config))
@@ -160,9 +183,17 @@ def main():
     table = boto3.resource("dynamodb", region_name=args.region).Table(table_name)
     print("Seeding %d site(s) into %s (%s)" % (len(items), table_name, args.region))
 
-    for item in items:
-        action = put_site(table, item)
-        print("  %-8s %-24s %s" % (action, item["siteId"], item["url"]))
+    for item, keep_existing in zip(items, keep_flags):
+        action = put_site(table, item, keep_existing=keep_existing)
+        if "isPublic" in keep_existing and action == "updated":
+            # The table kept whatever it had; this run did not decide.
+            visibility = "kept"
+        else:
+            visibility = "public" if item["isPublic"] else "private"
+        print(
+            "  %-8s %-24s %-8s %s"
+            % (action, item["siteId"], visibility, item["url"])
+        )
 
     if args.prune:
         configured = {i["siteId"] for i in items}

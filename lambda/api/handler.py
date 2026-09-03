@@ -74,6 +74,7 @@ MAX_CHECK_PAGES = 4
 # Route path of the unauthenticated feed, as it arrives in the HTTP API
 # payload (rawPath / routeKey).
 PUBLIC_PATH = "/public/status"
+PRIVATE_PATH = "/status"
 
 _dynamodb = boto3.resource(
     "dynamodb", config=Config(retries={"max_attempts": 3, "mode": "standard"})

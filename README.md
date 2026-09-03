@@ -10,21 +10,9 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 
 ## Architecture
 
-```
-EventBridge Scheduler (rate: 1 minute)
-        │
-        ▼
-  Checker Lambda ──── HTTPS GET ───▶ monitored websites
-        │
-        ├──▶ UptimeChecks   (one row per check, TTL 30 days)
-        ├──▶ CurrentStatus  (one row per site, live state)
-        ├──▶ Incidents      (open on threshold breach, close on recovery)
-        └──▶ SNS topic ───▶ email alert
+![MuBWeM architecture diagram](docs/mubwem.drawio.svg)
 
-  CloudFront ──▶ S3 (static dashboard)
-        │
-        └── fetch /status ──▶ API Gateway HTTP API ──▶ API Lambda ──▶ DynamoDB
-```
+*Diagram source: `docs/mubwem.drawio` — open with [draw.io](https://app.diagrams.net) or the draw.io desktop app to edit.*
 
 ### The four tables
 
@@ -68,8 +56,24 @@ The frontend never has the API URL committed to git: the CDK stack generates a `
 - **On-demand DynamoDB billing.** At a handful of sites and one check per minute, the write volume is trivial and on-demand costs cents. Provisioned capacity would be marginally cheaper at steady state but adds capacity planning and autoscaling config for no real benefit at this scale.
 - **A DynamoDB `Scan` on the Sites table each run.** Correct at tens of rows, where every row is needed anyway. At thousands of sites this becomes the first thing to fix — a GSI on `enabled`, or sharded scheduling.
 - **Uptime % is computed on read** from up to 24 hours of check rows. Simple and always accurate, but the API's cost grows with the retention window; a rollup table would be the next step.
-- **The API is public and unauthenticated,** with CORS open. It exposes only site names, URLs, and up/down state — the same thing the public status page shows. Do not point this at internal hostnames you would rather not publish.
+- **The API is public and unauthenticated,** with CORS open, and the CloudFront dashboard is equally open to anyone holding its URL. See [Known security gap: dashboard and API are public](#known-security-gap-dashboard-and-api-are-public) below for the exposure and the options for closing it.
 - **`removalPolicy: DESTROY`** on the tables and bucket. This is a test build meant to be torn down cleanly. Anything real should use `RETAIN`.
+
+---
+
+## Known security gap: dashboard and API are public
+
+Both the CloudFront dashboard URL and the `GET /status` API endpoint are reachable by anyone who has the URL. There is no authentication on either one — no login, no token, no IP restriction. The architecture diagram above marks both of these edges with a warning indicator.
+
+This was identified during Phase 1 testing, as a known property of the build, not discovered afterwards.
+
+Three fixes were considered. None is committed to yet:
+
+1. **A CloudFront Function doing HTTP Basic Auth at the edge.** Fastest to add — a few lines of JavaScript on the viewer-request event. Also the weakest as real access control: a shared credential, sent on every request, with no per-user identity or revocation.
+2. **AWS WAF with an IP allowlist in front of CloudFront.** Stronger, and appropriate if access should be limited to known office or VPN ranges. It requires a second stack in `us-east-1`, because a WAF web ACL attached to CloudFront must live there regardless of which region the distribution itself is configured from.
+3. **Putting it behind existing organizational SSO.** The correct answer for any real internal deployment, and the only one that gives per-user identity and revocation. It is also real implementation work — an authorizer at API Gateway, or at CloudFront — rather than a configuration change.
+
+The **Tradeoffs** bullet above about the API being public should be read together with this section rather than as a separate, lesser concern: the dashboard has exactly the same exposure, and closing one without the other closes nothing.
 
 ---
 

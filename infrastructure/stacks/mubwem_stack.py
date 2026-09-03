@@ -149,7 +149,7 @@ class MubwemStack(Stack):
         )
 
         sites_table.grant_read_data(checker_fn)
-        uptime_checks_table.grant_write_data(checker_fn)
+        uptime_checks_table.grant(checker_fn, "dynamodb:PutItem")
         current_status_table.grant_read_write_data(checker_fn)
         incidents_table.grant_read_write_data(checker_fn)
         alert_topic.grant_publish(checker_fn)

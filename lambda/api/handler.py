@@ -42,7 +42,7 @@ LIST RESPONSE (GET /status, GET /public/status)
       "lastStatusChangeAt":  "2026-08-26T22:01:10.004Z" | null,
       "uptime24h":           99.86 | null,   # percent of checks up, 2dp
       "checks24h":           1437,           # sample size behind uptime24h
-      "hourlyBuckets":       ["up", "up", "none", ...],   # exactly 24, oldest first
+      "hourlyBuckets":       ["up", "warn", "down", "none", ...],  # exactly 24
       "incidents": [                          # newest first, max 5
         {
           "startedAt":     "2026-08-26T21:58:10.004Z",
@@ -60,6 +60,26 @@ LIST RESPONSE (GET /status, GET /public/status)
 precedence over whatever CurrentStatus last recorded - a site nobody is
 checking is not "up", it is switched off. Paused sites are listed like any
 other, counted in `pausedCount`, and excluded from `overallUptime24h`.
+
+`hourlyBuckets` is 24 plain strings, oldest first, one per rolling hour of the
+last day. It carries three states plus "no data", not two:
+
+  "down"  this hour contains a check that was part of a run of
+          FAILURE_THRESHOLD or more consecutive failures - an incident by the
+          same definition the checker uses to open an Incident row and alert
+  "warn"  this hour contains a failed check, but no failing run reached the
+          threshold - an isolated blip that resolved before becoming an
+          incident
+  "up"    checks were recorded and every one succeeded
+  "none"  no check recorded this hour (paused, or the site did not exist yet)
+
+A run is marked from its beginning once it reaches the threshold, not from the
+check that crossed it, so the red span is the true length of the outage. See
+incident_level_checks() for the algorithm and its one known edge case.
+
+This is a display distinction only. `uptime24h` remains the plain percentage
+of individual checks that succeeded and is not affected by which bucket colour
+an hour ends up with.
 
 DETAIL RESPONSE (GET /status/{siteId}, GET /public/status/{siteId})
 
@@ -263,7 +283,72 @@ def uptime_from(checks):
     return round(up * 100.0 / total, 2), total, up
 
 
-def hourly_buckets(checks, now):
+def incident_level_checks(checks, threshold=None):
+    """Which checks belong to a failing run long enough to count as an incident.
+
+    Returns a list of booleans parallel to `checks`.
+
+    This mirrors the checker exactly: `consecutiveFailures` increments on every
+    failure and resets to zero on any success, and an incident opens the moment
+    that counter reaches FAILURE_THRESHOLD. Both Lambdas read that threshold
+    from the same environment variable, set once by the stack, so there is one
+    number and not two.
+
+    The one difference is retroactive marking. The checker only needs to know
+    *when* to open an incident, so it acts on the check that crosses the line.
+    This needs to colour the outage, so when a run reaches the threshold it
+    marks the whole run - the two failures before the third were part of the
+    same outage, and lighting up only the third would draw an incident shorter
+    than it actually was.
+
+    Precondition: `checks` must be in chronological order. check_history()
+    queries with ScanIndexForward=True, so it is; a caller that reorders the
+    list would silently break the run detection.
+
+    Known edge case, deliberately not solved: a run that began *before* the
+    24-hour window cannot be seen in full here, because its earliest checks are
+    outside the query. A run already in progress at the start of the window may
+    therefore need fewer visible failures than the threshold to be real, and
+    will not be marked until it accumulates `threshold` failures inside the
+    window. At a one-minute cadence that mislabels at most the first couple of
+    minutes of the oldest bucket. Widening the query to catch it would cost a
+    larger read on every site on every dashboard poll, which is not worth it.
+    """
+    if threshold is None:
+        threshold = FAILURE_THRESHOLD
+    threshold = max(1, int(threshold))
+
+    flags = [False] * len(checks)
+    run_start = None
+    run_len = 0
+
+    for index, item in enumerate(checks):
+        if item.get("isUp"):
+            run_start = None
+            run_len = 0
+            continue
+
+        if run_start is None:
+            run_start = index
+        run_len += 1
+
+        if run_len == threshold:
+            # The moment the run is confirmed, paint it from its beginning.
+            for back in range(run_start, index + 1):
+                flags[back] = True
+        elif run_len > threshold:
+            # Already confirmed; every further failure joins the same run.
+            flags[index] = True
+
+    return flags
+
+
+# Worst state wins within an hour, so one confirmed incident is not masked by
+# the fifty-nine successful checks around it.
+_BUCKET_RANK = {"none": 0, "up": 1, "warn": 2, "down": 3}
+
+
+def hourly_buckets(checks, now, threshold=None):
     """24 one-hour buckets over the last 24 hours, oldest first.
 
     The buckets are *rolling*, anchored on `now` rather than aligned to clock
@@ -271,25 +356,51 @@ def hourly_buckets(checks, now):
     started 24 hours ago. That matches the uptime window the percentage is
     computed over, so the bar and the percentage always describe the same span.
 
-    A bucket is "down" if any check in it failed - one failure inside an hour
-    is what the operator needs to see, and averaging it away would hide short
-    outages entirely. "none" means no check was recorded in that hour at all,
-    which is what a paused or newly added site looks like.
+    Each bucket is one of four states, worst-wins within the hour:
+
+      "down"  at least one check in this hour was part of a run of
+              FAILURE_THRESHOLD or more consecutive failures - a real incident
+              by this app's own definition, the same one that opens an Incident
+              row and sends an alert
+      "warn"  at least one check failed, but no failing run in this hour ever
+              reached the threshold - an isolated blip that resolved itself
+      "up"    checks were recorded and all of them succeeded
+      "none"  no check was recorded in this hour at all, which is what a paused
+              or newly added site looks like
+
+    The promotion from "warn" to "down" is what this split is for. Colouring
+    any single failure red made red mean "a blip happened", which is not what
+    the rest of the system means by an incident, and left an operator no way to
+    tell a one-minute wobble from a twenty-minute outage.
+
+    Note this changes only the bar. uptime24h is still the plain share of
+    individual checks that succeeded, computed in uptime_from(), and a "warn"
+    hour lowers it exactly as much as it always did.
     """
+    flags = incident_level_checks(checks, threshold)
+
     buckets = ["none"] * HOURLY_BUCKETS
-    for item in checks:
+    for index, item in enumerate(checks):
         checked = _parse_iso(item.get("checkedAt"))
         if checked is None:
             continue
         age_hours = (now - checked).total_seconds() / 3600.0
         # Clock skew can put a check marginally in the future; clamp it into
         # the newest bucket rather than dropping a real result.
-        index = HOURLY_BUCKETS - 1 - int(math.floor(max(age_hours, 0.0)))
-        if not 0 <= index < HOURLY_BUCKETS:
+        slot = HOURLY_BUCKETS - 1 - int(math.floor(max(age_hours, 0.0)))
+        if not 0 <= slot < HOURLY_BUCKETS:
             continue
-        if buckets[index] == "down":
-            continue
-        buckets[index] = "up" if item.get("isUp") else "down"
+
+        if flags[index]:
+            state = "down"
+        elif not item.get("isUp"):
+            state = "warn"
+        else:
+            state = "up"
+
+        if _BUCKET_RANK[state] > _BUCKET_RANK[buckets[slot]]:
+            buckets[slot] = state
+
     return buckets
 
 

@@ -44,6 +44,8 @@
         <div class="dash-layout">
           <div class="dash-main">
             <p id="result-count" class="result-count" hidden></p>
+            <!-- Filled by dashboard.js: what the three bar colours mean. -->
+            <div id="bucket-legend"></div>
 
             <!-- No aria-live here: render() replaces every child on each 20s
                  poll, so a live region would re-announce the whole grid.

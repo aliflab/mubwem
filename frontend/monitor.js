@@ -42,6 +42,7 @@
   var chart = null;
   var canEdit = false;
   var current = null;
+  var failureThreshold = 3;
 
   /* Cognito appends ?code=... to the redirect URI, which wipes our own ?site=
      off the URL on a sign-in round trip. Remember it so the page can still
@@ -76,7 +77,9 @@
     el.url.href = site.url || "#";
 
     el.hourbarHost.innerHTML = "";
-    el.hourbarHost.appendChild(MubwemDashboard.renderHourlyBar(site, true));
+    el.hourbarHost.appendChild(
+      MubwemDashboard.renderHourlyBar(site, true, failureThreshold)
+    );
 
     el.hourbarFoot.innerHTML = "";
     var foot = document.createElement("div");
@@ -98,6 +101,9 @@
     );
     foot.appendChild(span("hourbar-scale", "now"));
     el.hourbarFoot.appendChild(foot);
+    // The legend sits directly under the large bar here; the dashboard renders
+    // it once for the whole page instead.
+    el.hourbarFoot.appendChild(MubwemDashboard.renderLegend(failureThreshold));
 
     // The four stats that used to sit on the dashboard card.
     el.stats.innerHTML = "";
@@ -370,6 +376,7 @@
     return MubwemShell.apiFetch(STATUS_URL + "/" + encodeURIComponent(id))
       .then(function (payload) {
         current = payload.site;
+        if (payload.failureThreshold > 0) failureThreshold = payload.failureThreshold;
         MubwemShell.clearError();
         if (el.updated) {
           el.updated.textContent = MubwemDashboard.relativeTime(payload.generatedAt);

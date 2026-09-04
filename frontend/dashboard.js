@@ -52,6 +52,10 @@ window.MubwemDashboard = (function () {
   var lastPayload = null;
   var lastOptions = {};
   var generatedAt = null;
+  // How many consecutive failures the backend counts as an incident. Comes
+  // from the payload, which gets it from the same env var the checker reads,
+  // so the tooltip wording cannot drift from the rule that produced the bar.
+  var failureThreshold = 3;
 
   var filters = { query: "", status: "all", brand: "all", density: "cards" };
   var VIEW_KEY = "mubwem.dashboardView";
@@ -297,23 +301,50 @@ window.MubwemDashboard = (function () {
 
   // ------------------------------------------------------------ hourly bars
   function bucketState(value) {
-    return value === "up" || value === "down" ? value : "none";
+    return value === "up" || value === "down" || value === "warn"
+      ? value
+      : "none";
   }
 
   /* A spoken summary of the bar, since the bar itself is pure colour and the
      per-cell title tooltips are invisible to a screen reader and to touch. */
   function bucketSummary(buckets) {
-    var counts = { up: 0, down: 0, none: 0 };
+    var counts = { up: 0, warn: 0, down: 0, none: 0 };
     for (var i = 0; i < 24; i++) counts[bucketState(buckets[i])]++;
 
     var parts = [];
     function part(n, singular, plural) {
       if (n) parts.push(n + " " + (n === 1 ? singular : plural));
     }
-    part(counts.up, "hour up", "hours up");
-    part(counts.down, "hour down", "hours down");
+    part(counts.down, "hour with an incident", "hours with incidents");
+    part(counts.warn, "hour with an isolated failure", "hours with isolated failures");
+    part(counts.up, "hour fully up", "hours fully up");
     part(counts.none, "hour with no checks", "hours with no checks");
     return "Last 24 hours: " + (parts.length ? parts.join(", ") : "no data");
+  }
+
+  /* "14:00–15:00" for bucket i, which covers the hour ending (24 - i - 1)
+     hours before now. The buckets are rolling and anchored on the server's
+     generatedAt, which is at most one poll old, so the client clock is close
+     enough for a label. */
+  function bucketWindow(index) {
+    var end = new Date(Date.now() - (23 - index) * 3600000);
+    var start = new Date(end.getTime() - 3600000);
+    function hhmm(d) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return hhmm(start) + "–" + hhmm(end);
+  }
+
+  function bucketExplanation(state, threshold) {
+    if (state === "down") {
+      return "recorded incident (" + threshold + "+ consecutive failures)";
+    }
+    if (state === "warn") {
+      return "a check failed, but not enough in a row to reach the incident threshold";
+    }
+    if (state === "up") return "all checks succeeded";
+    return "no checks recorded";
   }
 
   /* 24 bars, one per hour of the last 24 hours, oldest on the left.
@@ -322,8 +353,9 @@ window.MubwemDashboard = (function () {
      the same 24h of checks the uptime percentage uses, so the bar and the
      percentage under it always describe the same window. A bar is red if any
      check in that hour failed, grey if no check was recorded at all. */
-  function renderHourlyBar(site, large) {
+  function renderHourlyBar(site, large, threshold) {
     var buckets = site.hourlyBuckets || [];
+    var limit = threshold || failureThreshold;
     var wrap = text("div", "hourbar" + (large ? " hourbar-large" : ""), null);
     wrap.setAttribute("role", "img");
     wrap.setAttribute("aria-label", bucketSummary(buckets));
@@ -331,13 +363,30 @@ window.MubwemDashboard = (function () {
     for (var i = 0; i < 24; i++) {
       var state = bucketState(buckets[i]);
       var bar = text("span", "hourbar-cell hourbar-" + state, null);
-      var hoursAgo = 24 - i;
       bar.title =
-        hoursAgo +
-        "h ago — " +
-        (state === "none" ? "no checks recorded" : state);
+        bucketWindow(i) + ": " + bucketExplanation(state, limit);
       wrap.appendChild(bar);
     }
+    return wrap;
+  }
+
+  /* One line explaining what the three colours mean. Rendered once per page
+     rather than under every card - twenty-four cards do not need twenty-four
+     legends. */
+  function renderLegend(threshold) {
+    var limit = threshold || failureThreshold;
+    var wrap = text("div", "bucket-legend", null);
+    [
+      ["down", "Incident (" + limit + "+ failures in a row)"],
+      ["warn", "Isolated failure"],
+      ["up", "Healthy"],
+      ["none", "No data"]
+    ].forEach(function (pair) {
+      var item = text("span", "legend-item", null);
+      item.appendChild(text("span", "legend-swatch hourbar-" + pair[0], null));
+      item.appendChild(text("span", null, pair[1]));
+      wrap.appendChild(item);
+    });
     return wrap;
   }
 
@@ -916,6 +965,13 @@ window.MubwemDashboard = (function () {
     lastPayload = payload;
     lastOptions = options || {};
     generatedAt = payload.generatedAt;
+    if (payload.failureThreshold > 0) failureThreshold = payload.failureThreshold;
+
+    var legendHost = document.getElementById("bucket-legend");
+    if (legendHost) {
+      legendHost.innerHTML = "";
+      legendHost.appendChild(renderLegend(failureThreshold));
+    }
 
     if (el.cards) el.cards.removeAttribute("aria-busy");
     ensureToolbar(payload);
@@ -1011,6 +1067,7 @@ window.MubwemDashboard = (function () {
     // Reused by monitor.js so the detail page draws the same bar and the same
     // incident list as the cards do.
     renderHourlyBar: renderHourlyBar,
+    renderLegend: renderLegend,
     renderIncidents: renderIncidents,
     renderStats: renderStats,
     relativeTime: relativeTime,

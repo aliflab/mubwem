@@ -80,6 +80,19 @@ Requiring three consecutive failures is what keeps a single flaky check from pag
 
 The list routes carry a top-level `summary` object (up/down/paused counts, weighted 24h uptime, MTBF, time since the last incident, incidents in the last 24h) and a 24-slot `hourlyBuckets` array per site. Both are computed from data the response was already assembling — the buckets come out of the same 24h `UptimeChecks` query the uptime percentage uses, so adding them cost no extra reads.
 
+Each bucket is one of four states, and the distinction between the first two is the point:
+
+| State | Colour | Means |
+|---|---|---|
+| `down` | red | this hour holds a check that was part of a run of `failureThreshold` or more consecutive failures — an incident by the same rule the checker uses to open an `Incidents` row and alert |
+| `warn` | amber | a check failed this hour, but no failing run reached the threshold — an isolated blip that resolved itself |
+| `up` | green | checks ran and all of them passed |
+| `none` | grey | no check recorded this hour (paused, or the site did not exist yet) |
+
+Colouring *any* failure red made red mean "a blip happened", which is not what the rest of the system means by an incident, and gave an operator no way to tell a one-minute wobble from a twenty-minute outage. A run is marked from its **first** failure once it reaches the threshold, not from the check that crossed it, so the red span is the true length of the outage — note this means the bar can show red slightly earlier than the matching `Incidents` row's `startedAt`, which records the moment of confirmation. See `incident_level_checks()` in `lambda/api/handler.py` for the algorithm and its one known edge case (a run that began before the 24h window).
+
+This is display only. `uptime24h` is still the plain share of individual checks that succeeded; an amber hour lowers it exactly as much as it always did.
+
 The detail routes add the raw 24h check series for the response-time graph, thinned by regular-interval sampling to at most 500 points (never truncated — truncation would quietly turn a 24-hour graph into an 8-hour one), plus up to 50 incidents instead of the list view's 5.
 
 On the public detail route, a site that is private and a site that does not exist return **the same 404 with the same body**, so it cannot be used to discover which site ids exist.

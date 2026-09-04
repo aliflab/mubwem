@@ -10,6 +10,7 @@
   --up: #16a34a;
   --down: #dc2626;
   --unknown: #9ca3af;
+  --warn: #d97706;
   --link: #3f4650;
   --link-hover: #14171c;
   --link-underline: rgba(63, 70, 80, 0.38);
@@ -31,6 +32,7 @@
     --up: #34d399;
     --down: #f87171;
     --unknown: #a1a8b3;
+    --warn: #fbbf24;
     --link: #ced4dc;
     --link-hover: #ffffff;
     --link-underline: rgba(206, 212, 220, 0.4);
@@ -848,6 +850,10 @@ button.danger:hover:not(:disabled) {
 }
 
 .hourbar-up { background: var(--up); }
+/* Amber: a check failed this hour, but never enough in a row to reach the
+   incident threshold. Red is reserved for a run the checker would have opened
+   an Incident for. */
+.hourbar-warn { background: var(--warn); }
 .hourbar-down { background: var(--down); }
 .hourbar-none { background: var(--border); }
 
@@ -864,6 +870,27 @@ button.danger:hover:not(:disabled) {
 }
 
 .hourbar-scale { text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ------------------------------------------------------------ bar legend */
+.bucket-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hourbar-foot + .bucket-legend { margin-top: 12px; }
+
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
 
 .hourbar-pct {
   font-size: 13px;

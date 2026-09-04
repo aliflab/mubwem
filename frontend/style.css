@@ -366,8 +366,13 @@ footer a { color: var(--muted); }
   stroke-linecap: round;
 }
 
-.card-up .ring-progress { stroke: var(--up); }
-.card-down .ring-progress { stroke: var(--down); }
+/* Keyed off the ring's own status class, so the colour holds wherever the
+   ring is placed. These were `.card-up .ring-progress` / `.card-down
+   .ring-progress`, which only ever matched inside a card; the list view's
+   `.monitor-row-up` matched neither and every ring fell through to the grey
+   default above. Paused and unknown deliberately keep that default. */
+.ring-up .ring-progress { stroke: var(--up); }
+.ring-down .ring-progress { stroke: var(--down); }
 
 .ring-label {
   position: absolute;

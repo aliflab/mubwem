@@ -219,7 +219,11 @@ window.MubwemDashboard = (function () {
      configured schedule interval, not a live signal from EventBridge - the
      browser has no way to know when the scheduler will actually fire. */
   function renderRing(site) {
-    var wrap = text("div", "ring", null);
+    // The status goes on the ring itself, not just on whatever contains it.
+    // The stroke colour used to be selected as `.card-up .ring-progress`,
+    // which silently depended on the ring living inside a card - a list row
+    // carries `.monitor-row-up` instead, matched no rule, and rendered grey.
+    var wrap = text("div", "ring ring-" + site.status, null);
     wrap.title =
       "Approximate time until the next check (every " +
       intervalFor(site) +

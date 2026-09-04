@@ -500,6 +500,9 @@ class MubwemStack(Stack):
                     "cognito-idp:AdminEnableUser",
                     "cognito-idp:AdminListGroupsForUser",
                     "cognito-idp:ListUsers",
+                    # Counting the Admins group, so the handler can refuse to
+                    # let the last remaining admin demote themselves.
+                    "cognito-idp:ListUsersInGroup",
                 ],
                 resources=[user_pool.user_pool_arn],
             )

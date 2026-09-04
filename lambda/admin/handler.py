@@ -533,6 +533,46 @@ def _handle_create_user(event):
     )
 
 
+def _is_last_admin(username):
+    """True unless another user can be confirmed to be in the Admins group.
+
+    Fail-closed, like everything else in this file: an API error, a response
+    shaped unexpectedly, an exception anywhere in the count - all return True.
+    Being unable to confirm that a second admin exists is not evidence that
+    one does, and guessing wrong here leaves a user pool with no admin in it
+    and no way back except the CLI bootstrap step.
+
+    Note what the return value means: True is "do not allow this", not "this
+    is definitely the last admin".
+    """
+    admin_group = ROLE_TO_GROUP["Admin"]
+    target = str(username).strip().lower()
+    try:
+        kwargs = {
+            "UserPoolId": USER_POOL_ID,
+            "GroupName": admin_group,
+            "Limit": USERS_PER_PAGE,
+        }
+        for _ in range(MAX_USER_PAGES):
+            page = cognito.list_users_in_group(**kwargs)
+            for user in page.get("Users", []):
+                other = str(user.get("Username") or "").strip().lower()
+                if other and other != target:
+                    # One confirmed admin who is not the caller is the whole
+                    # question - stop looking.
+                    return False
+            token = page.get("NextToken")
+            if not token:
+                break
+            kwargs["NextToken"] = token
+        return True
+    except Exception:
+        logger.exception(
+            "Could not count the %s group; refusing the self-demotion", admin_group
+        )
+        return True
+
+
 def _handle_update_user(event):
     denied = _require(event, ADMIN_ONLY)
     if denied:
@@ -546,6 +586,34 @@ def _handle_update_user(event):
     if "role" not in payload and "enabled" not in payload:
         raise Invalid("nothing to update - pass role and/or enabled")
 
+    # Resolved before anything is applied, because the last-admin guard below
+    # has to know what the role is being changed *to*.
+    new_group = _role_to_group(payload["role"]) if "role" in payload else None
+
+    # Last-admin guard. Reaching this line means _require() accepted the
+    # caller as an Admin, so "target is me, and the new role is not Admin" is
+    # exactly the request that takes Admins away from the caller - no separate
+    # lookup of their current groups is needed to establish that.
+    #
+    # Self-demotion only. An admin changing someone else's role stays an admin
+    # either way, so the invariant "at least one admin exists" is never in
+    # question and the count is not worth paying for.
+    if (
+        new_group is not None
+        and new_group != ROLE_TO_GROUP["Admin"]
+        and _is_self(event, username)
+        and _is_last_admin(username)
+    ):
+        return _response(
+            409,
+            {
+                "error": (
+                    "cannot remove Admins role: you are the last remaining "
+                    "admin"
+                )
+            },
+        )
+
     if "enabled" in payload:
         if not isinstance(payload["enabled"], bool):
             raise Invalid("enabled must be true or false")
@@ -556,7 +624,7 @@ def _handle_update_user(event):
 
     try:
         if "role" in payload:
-            group = _role_to_group(payload["role"])
+            group = new_group
             # Leave every group we recognise, then join the new one. Doing it
             # in that order means a user is never briefly in two roles.
             for current in _groups_for_user(username):

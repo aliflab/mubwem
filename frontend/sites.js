@@ -4,6 +4,11 @@
  * page. The permission model is unchanged from the old admin.js: Admins and Editors
  * reach this page, only Admins see delete controls.
  *
+ * Creating a monitor moved to add-monitor.html. The inline form that used to
+ * sit under this table was replaced rather than kept alongside it: two ways to
+ * create the same thing means two sets of validation to keep in step, and the
+ * full page has room to explain the fields.
+ *
  * ON THE ROLE CHECKS IN THIS FILE
  *
  * Reading `cognito:groups` to decide what to draw — not rendering delete
@@ -26,8 +31,7 @@
     overall: document.getElementById("overall"),
     panel: document.getElementById("sites-panel"),
     rows: document.getElementById("sites-rows"),
-    loading: document.getElementById("sites-loading"),
-    form: document.getElementById("site-form")
+    loading: document.getElementById("sites-loading")
   };
 
   // Display-only, per the note at the top of this file.
@@ -172,56 +176,6 @@
       });
   }
 
-  function submit(event) {
-    event.preventDefault();
-    MubwemShell.clearError();
-
-    var form = el.form;
-    var button = form.querySelector("button[type=submit]");
-    var body = {
-      name: form.elements.name.value.trim(),
-      url: form.elements.url.value.trim(),
-      checkIntervalSec: Number(form.elements.checkIntervalSec.value) || 60
-    };
-    var brand = form.elements.brand.value.trim();
-    if (brand) body.brand = brand;
-
-    if (body.url.indexOf("https://") !== 0) {
-      MubwemShell.showError("URL must start with https://");
-      return;
-    }
-
-    // Mirrors the server's floor in lambda/admin/handler.py. The input's
-    // min="60" already blocks the spinner, but a typed value still reaches
-    // here, and a message beats a round trip that comes back 400.
-    if (body.checkIntervalSec < 60) {
-      MubwemShell.showError(
-        "Check interval must be at least 60 seconds — the scheduler cannot " +
-          "check more often than once a minute."
-      );
-      return;
-    }
-
-    button.disabled = true;
-    api("POST", "/sites", body)
-      .then(function (payload) {
-        form.reset();
-        form.elements.checkIntervalSec.value = 60;
-        MubwemShell.showNotice(
-          "Added " +
-            payload.site.name +
-            ". It starts paused and private — flip the switches when ready."
-        );
-        return load();
-      })
-      .catch(function (err) {
-        MubwemShell.showError(err.message);
-      })
-      .then(function () {
-        button.disabled = false;
-      });
-  }
-
   MubwemShell.boot({
     page: "sites",
     requireGroups: ["Admins", "Editors"],
@@ -242,7 +196,7 @@
       el.overall.className = "overall overall-up";
 
       el.panel.hidden = false;
-      el.form.addEventListener("submit", submit);
+      // The add form lives on add-monitor.html now; this page links to it.
       load();
     }
   }).catch(function () {

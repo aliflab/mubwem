@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Monitors</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23f59e0b'/></svg>">
 </head>
@@ -19,7 +24,10 @@
             <p class="tagline">Add, edit and pause monitored sites</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Signing in…</div>
+            <div class="meta-status">
+              <div id="overall" class="overall">Signing in…</div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>
@@ -33,12 +41,25 @@
         <div id="notice" class="notice" hidden></div>
 
         <section id="sites-panel" class="panel" hidden>
-          <h2>Sites</h2>
-          <p class="panel-hint">
-            <strong>Enabled</strong> decides whether the checker sweeps a site at
-            all. <strong>Public</strong> puts it on the shareable status page, with
-            no login. Both save the moment you flip them.
-          </p>
+          <div class="panel-head">
+            <div>
+              <h2>Sites</h2>
+              <p class="panel-hint">
+                <strong>Enabled</strong> decides whether the checker sweeps a
+                site at all. <strong>Public</strong> puts it on the shareable
+                status page, with no login. Both save the moment you flip them.
+              </p>
+            </div>
+            <!-- The inline add form moved to its own page: the full form has
+                 room to explain each field, and the table stays a table. -->
+            <a href="add-monitor.html" class="button-link primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5v14"></path><path d="M5 12h14"></path>
+              </svg>
+              Add monitor
+            </a>
+          </div>
           <div class="table-scroll">
             <table class="admin-table">
               <thead>
@@ -56,34 +77,6 @@
             </table>
           </div>
           <p id="sites-loading" class="loading">Loading sites…</p>
-
-          <form id="site-form" class="form-row" autocomplete="off">
-            <div class="field">
-              <label for="site-name">Name</label>
-              <input id="site-name" name="name" type="text" required
-                     placeholder="Example Home">
-            </div>
-            <div class="field">
-              <label for="site-url">URL</label>
-              <input id="site-url" name="url" type="url" required
-                     placeholder="https://example.com">
-            </div>
-            <div class="field">
-              <label for="site-brand">Brand</label>
-              <input id="site-brand" name="brand" type="text"
-                     placeholder="Example Brand">
-            </div>
-            <div class="field field-narrow">
-              <label for="site-interval">Check interval (s)</label>
-              <input id="site-interval" name="checkIntervalSec" type="number"
-                     min="60" max="86400" step="10" value="60"
-                     aria-describedby="site-interval-help">
-              <small class="field-help" id="site-interval-help">
-                60s minimum — the scheduler cannot check more often.
-              </small>
-            </div>
-            <button type="submit" class="primary">Add site</button>
-          </form>
         </section>
       </main>
 

@@ -279,21 +279,52 @@
     var checks = document.createElement("div");
     checks.className = "form-checks";
 
-    function checkbox(label, name, checked) {
-      var lab = document.createElement("label");
-      lab.className = "check-label";
+    /* A track-and-thumb switch, the same one the Monitors table uses, rather
+       than a bare checkbox. The <input> keeps its name so
+       form.elements.enabled / .isPublic still read it. */
+    function toggleField(label, hint, name, checked) {
+      var wrap = document.createElement("label");
+      wrap.className = "switch-field";
+
+      var toggle = document.createElement("span");
+      toggle.className = "toggle";
       var input = document.createElement("input");
       input.type = "checkbox";
       input.name = name;
       input.checked = Boolean(checked);
-      lab.appendChild(input);
-      // The gap between box and text is CSS now, not a leading space.
-      lab.appendChild(document.createTextNode(label));
-      checks.appendChild(lab);
+      toggle.appendChild(input);
+      var track = document.createElement("span");
+      track.className = "toggle-track";
+      toggle.appendChild(track);
+      wrap.appendChild(toggle);
+
+      var textWrap = document.createElement("span");
+      textWrap.className = "switch-text";
+      var title = document.createElement("span");
+      title.className = "switch-title";
+      title.textContent = label;
+      var sub = document.createElement("span");
+      sub.className = "switch-hint";
+      sub.textContent = hint;
+      textWrap.appendChild(title);
+      textWrap.appendChild(sub);
+      wrap.appendChild(textWrap);
+
+      checks.appendChild(wrap);
     }
 
-    checkbox("Enabled", "enabled", site.enabled);
-    checkbox("Public status page", "isPublic", site.isPublic);
+    toggleField(
+      "Enabled",
+      "The checker sweeps this monitor every minute.",
+      "enabled",
+      site.enabled
+    );
+    toggleField(
+      "Public status page",
+      "Visible on public.html with no sign-in.",
+      "isPublic",
+      site.isPublic
+    );
     form.appendChild(checks);
 
     var actions = document.createElement("div");

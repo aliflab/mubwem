@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Integrations &amp; API</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%237c3aed'/></svg>">
 </head>
@@ -19,7 +24,10 @@
             <p class="tagline">What this deployment exposes</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Informational</div>
+            <div class="meta-status">
+              <div id="overall" class="overall">Informational</div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>

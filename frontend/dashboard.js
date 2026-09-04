@@ -679,6 +679,13 @@ window.MubwemDashboard = (function () {
 
     var row = text("div", "toolbar-row");
 
+    // Wrapped so the magnifier can sit inside the field. The icon comes from
+    // nav.js's hand-written set - there is no icon font on this page.
+    var searchWrap = text("div", "search-wrap", null);
+    if (window.MubwemNav && MubwemNav.icon) {
+      searchWrap.appendChild(MubwemNav.icon("search"));
+    }
+
     var search = document.createElement("input");
     search.type = "search";
     search.className = "toolbar-search";
@@ -693,7 +700,8 @@ window.MubwemDashboard = (function () {
         renderGrid();
       }, SEARCH_DEBOUNCE_MS);
     });
-    row.appendChild(search);
+    searchWrap.appendChild(search);
+    row.appendChild(searchWrap);
 
     var statusWrap = text("div", "segmented");
     statusWrap.setAttribute("role", "group");
@@ -965,11 +973,24 @@ window.MubwemDashboard = (function () {
     tick();
   }
 
+  /* Incidents that have not resolved, across every site in the payload. Feeds
+     the unread-style badge on the Incidents nav item. */
+  function openIncidentCount(payload) {
+    var open = 0;
+    (payload.sites || []).forEach(function (site) {
+      (site.incidents || []).forEach(function (incident) {
+        if (!incident.resolved) open++;
+      });
+    });
+    return open;
+  }
+
   function render(payload, options) {
     lastPayload = payload;
     lastOptions = options || {};
     generatedAt = payload.generatedAt;
     if (payload.failureThreshold > 0) failureThreshold = payload.failureThreshold;
+    if (window.MubwemNav) MubwemNav.setIncidentCount(openIncidentCount(payload));
 
     var legendHost = document.getElementById("bucket-legend");
     if (legendHost) {

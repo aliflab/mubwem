@@ -28,11 +28,16 @@
     filter: document.getElementById("site-filter"),
     updated: document.getElementById("updated"),
     overall: document.getElementById("overall"),
-    scopeNote: document.getElementById("scope-note")
+    scopeNote: document.getElementById("scope-note"),
+    exportBtn: document.getElementById("export-csv")
   };
 
   var incidents = [];
   var siteNames = [];
+
+  var QUOTE = String.fromCharCode(34);
+  var CRLF = String.fromCharCode(13) + String.fromCharCode(10);
+  var BOM = String.fromCharCode(0xfeff);
 
   function text(tag, className, value) {
     var node = document.createElement(tag);
@@ -110,6 +115,20 @@
       siteCell.appendChild(link);
       row.appendChild(siteCell);
 
+      // Two states only. The design reference showed an "Acknowledged"
+      // middle state; this app has no such concept - an incident is open
+      // until the checker sees a success - so inventing one here would
+      // describe a workflow that does not exist.
+      var statusCell = text("td", null, null);
+      statusCell.appendChild(
+        text(
+          "span",
+          "badge " + (incident.resolved ? "badge-up" : "badge-down"),
+          incident.resolved ? "RESOLVED" : "ONGOING"
+        )
+      );
+      row.appendChild(statusCell);
+
       var when = new Date(incident.startedAt);
       row.appendChild(
         text(
@@ -143,6 +162,87 @@
     }
   }
 
+  /* ------------------------------------------------------------ CSV export
+     Real, not a stub: the rows are already in memory, so the file is built
+     and downloaded here with no backend call and no new endpoint.
+
+     Quoting follows RFC 4180 - every field is quoted and an embedded quote is
+     doubled. That matters because triggerReason is free text straight from
+     the checker ("3 consecutive failures - URLError: timed out"), and an
+     unquoted comma in it would silently shift every later column. */
+  function csvCell(value) {
+    var str = value === null || value === undefined ? "" : String(value);
+    return QUOTE + str.split(QUOTE).join(QUOTE + QUOTE) + QUOTE;
+  }
+
+  function buildCsv(rows) {
+    var lines = [
+      ["Monitor", "Status", "Started", "Duration (s)", "Trigger"]
+        .map(csvCell)
+        .join(",")
+    ];
+    rows.forEach(function (incident) {
+      lines.push(
+        [
+          incident.siteName,
+          incident.resolved ? "Resolved" : "Ongoing",
+          incident.startedAt,
+          // Blank rather than 0 for an incident still running: a duration of
+          // zero would read as "it lasted no time at all".
+          incident.resolved && incident.durationSec !== null &&
+            incident.durationSec !== undefined
+            ? incident.durationSec
+            : "",
+          incident.triggerReason
+        ]
+          .map(csvCell)
+          .join(",")
+      );
+    });
+    // CRLF and a UTF-8 BOM so Excel opens it as UTF-8 rather than mangling
+    // any non-ASCII in a monitor name.
+    return BOM + lines.join(CRLF) + CRLF;
+  }
+
+  function exportCsv() {
+    var chosen = el.filter.value;
+    var rows = chosen
+      ? incidents.filter(function (i) {
+          return i.siteName === chosen;
+        })
+      : incidents;
+
+    if (!rows.length) {
+      MubwemShell.showError("Nothing to export - no incidents are listed.");
+      return;
+    }
+
+    var stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    var name =
+      "mubwem-incidents-" +
+      (chosen ? chosen.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" : "") +
+      stamp +
+      ".csv";
+
+    var blob = new Blob([buildCsv(rows)], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    // Let the download start before the blob is released.
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+
+    MubwemShell.showNotice(
+      "Exported " + rows.length + (rows.length === 1 ? " incident" : " incidents") +
+        " to " + name + "."
+    );
+  }
+
   function refresh() {
     return MubwemShell.apiFetch(API_URL)
       .then(function (payload) {
@@ -155,10 +255,11 @@
         if (el.updated) {
           el.updated.textContent = MubwemDashboard.relativeTime(payload.generatedAt);
         }
+        var open = incidents.filter(function (i) {
+          return !i.resolved;
+        }).length;
+        if (window.MubwemNav) MubwemNav.setIncidentCount(open);
         if (el.overall) {
-          var open = incidents.filter(function (i) {
-            return !i.resolved;
-          }).length;
           el.overall.textContent = open
             ? open + " ongoing"
             : incidents.length + " recorded";
@@ -179,6 +280,7 @@
     page: "incidents",
     ready: function () {
       el.filter.addEventListener("change", render);
+      if (el.exportBtn) el.exportBtn.addEventListener("click", exportCsv);
       refresh();
       setInterval(refresh, POLL_MS);
     }

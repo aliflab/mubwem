@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Add Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23f59e0b'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <nav id="sidenav" class="sidenav" aria-label="Main"></nav>
+
+    <div class="shell-main">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div>
+            <a href="sites.html" class="crumb">← Monitors</a>
+            <h1>Create new monitor</h1>
+            <p class="tagline">Adds a site to the sweep. It starts paused.</p>
+          </div>
+          <div class="meta">
+            <div class="meta-status">
+              <div id="overall" class="overall">Signing in…</div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
+            <div class="session">
+              <span id="signed-in-as"></span>
+              <a href="#" id="logout" class="logout" hidden>Log out</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div id="error" class="error" hidden></div>
+        <div id="notice" class="notice" hidden></div>
+
+        <section class="panel form-panel" id="form-panel" hidden>
+          <h2>Monitor details</h2>
+          <p class="panel-hint">
+            The URL must be HTTPS. A new monitor is created paused and private,
+            so nothing is checked and nothing is published until you turn it on.
+          </p>
+
+          <form id="add-form" autocomplete="off" class="form-grid">
+            <div class="field">
+              <label for="m-name">Name</label>
+              <input id="m-name" name="name" type="text" required
+                     placeholder="Example Home" maxlength="200">
+              <small class="field-help">Shown on the dashboard card and in alerts.</small>
+            </div>
+
+            <div class="field">
+              <label for="m-brand">Brand</label>
+              <input id="m-brand" name="brand" type="text"
+                     placeholder="Example Brand" maxlength="120">
+              <small class="field-help">Groups the monitor into a filter chip. Optional.</small>
+            </div>
+
+            <div class="field field-wide">
+              <label for="m-url">URL</label>
+              <input id="m-url" name="url" type="url" required
+                     placeholder="https://example.com" aria-describedby="m-url-help">
+              <small class="field-help" id="m-url-help">Must start with https://</small>
+            </div>
+
+            <div class="field field-narrow">
+              <label for="m-interval">Check interval (s)</label>
+              <input id="m-interval" name="checkIntervalSec" type="number"
+                     min="60" max="86400" step="10" value="60"
+                     aria-describedby="m-interval-help">
+              <small class="field-help" id="m-interval-help">
+                60s minimum — the scheduler cannot check more often.
+              </small>
+            </div>
+
+            <div class="form-checks" id="m-checks"></div>
+
+            <div class="form-actions">
+              <button type="submit" class="primary" id="m-submit">Create monitor</button>
+              <a href="sites.html" class="button-link">Cancel</a>
+            </div>
+          </form>
+        </section>
+      </main>
+
+      <footer>
+        <span>
+          Creating a monitor requires the Admins or Editors role. The
+          <code>POST /admin/sites</code> route enforces that server-side.
+        </span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="nav.js"></script>
+  <script src="shell.js"></script>
+  <script src="add-monitor.js"></script>
+</body>
+</html>

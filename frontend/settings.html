@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%239ca3af'/></svg>">
 </head>
@@ -19,7 +24,10 @@
             <p class="tagline">Current operational configuration</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Read-only</div>
+            <div class="meta-status">
+              <div id="overall" class="overall">Read-only</div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>
@@ -33,32 +41,47 @@
 
         <div class="stub-banner">
           <strong>This page is read-only.</strong>
-          Additional settings are not yet configurable from this panel. The
-          values below are set at deploy time and shown here for reference —
-          change them with <code>cdk deploy -c key=value</code> or the
-          <code>MUBWEM_</code> environment variables described in the README.
+          Every value below is fixed at deploy time and shown here for
+          reference. Change them with <code>cdk deploy -c key=value</code> or
+          the <code>MUBWEM_</code> environment variables described in the
+          README. Nothing on this page writes anything.
         </div>
 
         <section class="panel">
-          <h2>Monitoring</h2>
+          <h2>Monitoring intervals</h2>
+          <p class="panel-hint">How often checks run, and from where.</p>
+          <div id="intervals"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Alert thresholds</h2>
           <p class="panel-hint">
-            Read from the deploy-generated <code>config.js</code>. A dash means
-            the value was not published to the frontend.
+            What counts as an incident, and how long the evidence is kept.
           </p>
-          <dl class="config-list" id="config-list"></dl>
+          <div id="thresholds"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Notification channels</h2>
+          <p class="panel-hint">
+            Where alerts go. A channel with no support in this deployment is
+            listed as not configured rather than left out — it is the honest
+            way to show what is missing.
+          </p>
+          <div id="channels"></div>
         </section>
 
         <section class="panel">
           <h2>Not built yet</h2>
           <p class="panel-hint">
-            These would each need real backend support, so they are listed
-            rather than mocked up:
+            Each of these needs backend work that does not exist, so none of it
+            is mocked up as a control:
           </p>
           <ul class="todo-list">
-            <li>Per-user notification preferences (alerts go to one SNS email for the whole deployment)</li>
+            <li>Per-user notification preferences — alerts go to one address for the whole deployment</li>
             <li>Alert routing beyond email — Slack, SMS, PagerDuty</li>
             <li>Maintenance windows that suppress alerting</li>
-            <li>Per-site alert thresholds (the failure threshold is deployment-wide)</li>
+            <li>Per-monitor failure thresholds — the threshold is deployment-wide</li>
           </ul>
         </section>
       </main>

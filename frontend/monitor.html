@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%2316a34a'/></svg>">
 </head>
@@ -20,8 +25,11 @@
             <p class="tagline" id="site-brand"></p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Loading…</div>
-            <div class="updated">Updated <span id="updated">—</span></div>
+            <div class="meta-status">
+              <div id="overall" class="overall">Loading…</div>
+              <div class="updated">Updated <span id="updated">—</span></div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>
@@ -36,14 +44,23 @@
 
         <section class="panel" id="overview" hidden>
           <div class="detail-head">
-            <div>
+            <div class="detail-id">
               <span id="site-badge" class="badge">—</span>
               <a id="site-url" class="card-url" target="_blank" rel="noopener noreferrer"></a>
             </div>
-            <!-- Rendered only for Admins and Editors — see monitor.js. -->
-            <button type="button" id="edit-toggle" class="primary" hidden>Edit monitor</button>
+            <!-- Rendered only for Admins and Editors — see monitor.js. A
+                 Viewer gets no button at all, not a disabled one. -->
+            <button type="button" id="edit-toggle" class="primary" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+              Edit monitor
+            </button>
           </div>
 
+          <p class="section-label">Last 24 hours</p>
           <div id="hourbar-host"></div>
           <div id="hourbar-foot"></div>
           <dl class="stats" id="detail-stats"></dl>

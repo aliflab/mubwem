@@ -116,6 +116,14 @@ Two functions rather than more routes on one: the status API is reachable anonym
 
 Both responses have the same shape, so one renderer (`frontend/dashboard.js`) serves both pages; `public.html` is styled distinctly so it is obvious which view you are looking at. The filter runs before any per-site work, so a site the caller will not see costs no `UptimeChecks` or `Incidents` read. `isPublic` itself is never echoed back on either route.
 
+### Look and feel
+
+The interface follows a dark design system defined entirely in `frontend/style.css`: surface/border/status tokens as CSS custom properties, Archivo for headings, Inter for body and JetBrains Mono for figures (loaded from Google Fonts, the only font dependency), a shared small-caps label style, a 4px status-coloured left border on cards and rows, and one track-and-thumb switch used everywhere a boolean is edited.
+
+There is **no CSS framework and no JS framework**. The reference designs were produced with Tailwind, petite-vue and Iconify; none of the three is used here. Icons are hand-written inline SVG in `nav.js`, exposed as `MubwemNav.icon(name)` so the toolbar, buttons and stub pages share one set without a second copy of the path data. The only external scripts in the whole frontend are Chart.js (monitor detail) and the Google Fonts stylesheet.
+
+The palette is dark only. A light counterpart was not invented, since the design tokens supplied were dark throughout.
+
 `frontend/` is plain HTML/CSS/JS with no build step; the status pages poll every 20 seconds and render one card per site, down sites first.
 
 ### Pages
@@ -127,7 +135,8 @@ A persistent side navigation (`nav.js`) is shared by every authenticated page. *
 | `index.html` | any signed-in user | A toolbar (search, status, brand, density) over two summary cards and a grid of monitor cards. Each card carries the status badge, the countdown ring, a 24-bar hourly history and the 24h uptime percentage, and links through to the detail page. |
 | `monitor.html?site=<siteId>` | any signed-in user | One monitor: the large hourly bar, the four detail stats that used to sit on the card, a Chart.js response-time graph over the last 24h, and up to 50 incidents. Admins and Editors additionally get an **Edit** form that `PATCH`es `/admin/sites/{siteId}`; a Viewer sees no edit control at all, not a disabled one. |
 | `incidents.html` | any signed-in user | Flat cross-site incident list, newest first, with a client-side filter by monitor. |
-| `sites.html` | Admins, Editors | Monitor management: the enable/public toggles, the add-site form, and (Admins only) delete. |
+| `sites.html` | Admins, Editors | Monitor management: the enable/public toggles and (Admins only) delete. Links to the create form. |
+| `add-monitor.html` | Admins, Editors | Full-page create form (name, brand, URL, interval, Enabled and Public switches). Posts to the existing `POST /admin/sites`. |
 | `team.html` | Admins | User management. An Editor reaching it is told why there is nothing to see. |
 | `settings.html` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
 | `integrations.html` | any signed-in user | **Stub.** The API URLs and a `curl` example. No integrations exist. |
@@ -138,6 +147,15 @@ A persistent side navigation (`nav.js`) is shared by every authenticated page. *
 The toolbar filters the `/status` document the page is **already** polling: a text search over name, URL and brand; a status segment (All / Up / Down / Paused) whose counts come from the payload's `summary`; one chip per brand; and a card/list density toggle. None of it issues a request, and none of it needed a backend change — which is why there is no `?q=` or `?status=` parameter on any route.
 
 Filtering never re-sorts. The API returns sites down-first then by name, and that ordering survives every filter, which is also why brands are chips rather than grouped sections. The two summary cards keep describing the whole deployment even when a filter is narrowing the grid — they are the deployment roll-up, not a view of what is on screen — and a "Showing 3 of 8 monitors" line makes the filtered subset explicit. The status filter and density are remembered in `localStorage`; the search text and brand are not.
+
+> **`add-monitor.html` is not a registered Cognito callback URL.** The
+> `AUTHENTICATED_PAGES` tuple in `infrastructure/stacks/mubwem_stack.py` lists
+> the pages the hosted UI may return to, and adding one is a CDK change. The
+> page is reached from **Monitors**, so a signed-in user always arrives with a
+> live session and never redirects. Only a cold load of `/add-monitor.html`
+> with no session bounces through the hosted UI and lands on the dashboard
+> instead of coming back. Adding `"add-monitor.html"` to that tuple and
+> redeploying fixes it; nothing else about the page needs a backend change.
 
 `settings.html` and `integrations.html` are **placeholders, shipped as placeholders**. Neither has a control that changes anything, and both say so on the page. There is nothing behind them to configure yet: alerting is one SNS topic with one email subscription fixed at deploy time, and there are no webhooks, API keys or third-party targets. See the [roadmap](#roadmap-later-phases).
 
@@ -407,6 +425,7 @@ mubwem/
 │   ├── monitor.html        one monitor: hourly bar, response graph, incidents, edit
 │   ├── incidents.html      cross-site incident list
 │   ├── sites.html          monitor management (Admins, Editors)
+│   ├── add-monitor.html    full-page create form (Admins, Editors)
 │   ├── team.html           user management (Admins)
 │   ├── settings.html       stub: read-only deploy config
 │   ├── integrations.html   stub: API URLs, no integrations

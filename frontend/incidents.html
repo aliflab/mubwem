@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Incidents</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23dc2626'/></svg>">
 </head>
@@ -19,8 +24,11 @@
             <p class="tagline">Across every monitor</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Loading…</div>
-            <div class="updated">Updated <span id="updated">—</span></div>
+            <div class="meta-status">
+              <div id="overall" class="overall">Loading…</div>
+              <div class="updated">Updated <span id="updated">—</span></div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>
@@ -39,11 +47,23 @@
               <h2>Recent incidents</h2>
               <p class="panel-hint" id="scope-note"></p>
             </div>
-            <div class="field">
-              <label for="site-filter">Filter by monitor</label>
-              <select id="site-filter">
-                <option value="">All monitors</option>
-              </select>
+            <div class="panel-tools">
+              <div class="field">
+                <label for="site-filter">Filter by monitor</label>
+                <select id="site-filter">
+                  <option value="">All monitors</option>
+                </select>
+              </div>
+              <!-- Real export: builds a CSV from the incidents already on the
+                   page and downloads it. No backend call. -->
+              <button type="button" id="export-csv">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path>
+                </svg>
+                Export CSV
+              </button>
             </div>
           </div>
 
@@ -52,6 +72,7 @@
               <thead>
                 <tr>
                   <th>Monitor</th>
+                  <th>Status</th>
                   <th>Started</th>
                   <th>Duration</th>
                   <th>Trigger</th>

@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MuBWeM — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Archivo for headings, Inter for body, JetBrains Mono for figures.
+       Five faces total - the minimum that keeps the hierarchy intact. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%2316a34a'/></svg>">
 </head>
@@ -19,8 +24,11 @@
             <p class="tagline">Multi-Brand Website Monitor</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall" aria-live="polite">Loading…</div>
-            <div class="updated">Updated <span id="updated">—</span></div>
+            <div class="meta-status">
+              <div id="overall" class="overall" aria-live="polite">Loading…</div>
+              <div class="updated">Updated <span id="updated">—</span></div>
+            </div>
+            <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
               <span id="signed-in-as"></span>
               <a href="#" id="logout" class="logout" hidden>Log out</a>
@@ -44,6 +52,26 @@
         <div class="dash-layout">
           <div class="dash-main">
             <p id="result-count" class="result-count" hidden></p>
+
+            <!-- The reference had a "Pro Tip" box advertising Slack webhooks.
+                 No Slack integration exists here, so the box keeps the visual
+                 pattern and says something true instead. -->
+            <div class="tip-box">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 18h6"></path><path d="M10 22h4"></path>
+                <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"></path>
+              </svg>
+              <div>
+                <span class="tip-title">Tip</span>
+                <p class="tip-body">
+                  Alerts go to the single SNS email address configured at deploy
+                  time — there are no per-user or per-site notification rules yet.
+                  <a href="integrations.html">Integrations &amp; API</a> lists what
+                  this deployment actually exposes, and what is still unbuilt.
+                </p>
+              </div>
+            </div>
             <!-- Filled by dashboard.js: what the three bar colours mean. -->
             <div id="bucket-legend"></div>
 

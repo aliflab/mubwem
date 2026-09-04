@@ -177,11 +177,21 @@ window.MubwemDashboard = (function () {
   }
 
   // ------------------------------------------------------------ countdown ring
+  /* The deployment-wide sweep cadence, from the deploy-generated config.js,
+     derived from the same schedule expression that drives EventBridge
+     Scheduler. Only a fallback now - see intervalFor(). */
   function scheduleIntervalSec() {
-    // Set by the deploy-generated config.js, derived from the same schedule
-    // expression that drives EventBridge Scheduler.
     var configured = Number(window.MUBWEM_SCHEDULE_INTERVAL_SEC);
     return configured > 0 ? configured : 60;
+  }
+
+  /* A site's own configured interval, which every /status route now returns.
+     The global cadence is the fallback for a site whose row predates the
+     field - it should not happen, but a ring counting the wrong number is
+     worse than a ring counting an approximate one. */
+  function intervalFor(site) {
+    var own = Number(site && site.checkIntervalSec);
+    return own > 0 ? own : scheduleIntervalSec();
   }
 
   function svgNode(tag, attrs) {
@@ -199,7 +209,10 @@ window.MubwemDashboard = (function () {
      browser has no way to know when the scheduler will actually fire. */
   function renderRing(site) {
     var wrap = text("div", "ring", null);
-    wrap.title = "Approximate time until the next check";
+    wrap.title =
+      "Approximate time until the next check (every " +
+      intervalFor(site) +
+      "s)";
 
     var svg = svgNode("svg", {
       viewBox: "0 0 44 44",
@@ -238,6 +251,7 @@ window.MubwemDashboard = (function () {
         site.status !== "paused" && site.lastCheckedAt
           ? Date.parse(site.lastCheckedAt)
           : NaN,
+      interval: intervalFor(site),
       progress: progress,
       label: label
     });
@@ -245,7 +259,6 @@ window.MubwemDashboard = (function () {
   }
 
   function tickRings() {
-    var interval = scheduleIntervalSec();
     rings.forEach(function (ring) {
       if (isNaN(ring.checkedAt)) {
         // Never checked, or paused: an empty ring rather than a fake countdown.
@@ -253,6 +266,9 @@ window.MubwemDashboard = (function () {
         ring.label.textContent = "-";
         return;
       }
+      // Each ring carries its own site's interval, so a 30s site counts down
+      // from 30 while a 60s one beside it counts down from 60.
+      var interval = ring.interval;
       var elapsed = Math.max(0, (Date.now() - ring.checkedAt) / 1000);
       var remaining = interval - (elapsed % interval);
       var fraction = remaining / interval;

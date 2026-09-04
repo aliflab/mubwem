@@ -35,6 +35,7 @@ LIST RESPONSE (GET /status, GET /public/status)
       "brand":               "Example Brand",
       "status":              "up" | "down" | "paused" | "unknown",
       "enabled":             true,
+      "checkIntervalSec":    60,
       "lastCheckedAt":       "2026-08-27T09:14:03.221Z" | null,
       "lastResponseTimeMs":  312 | null,
       "consecutiveFailures": 0,
@@ -71,8 +72,8 @@ Everything a list entry carries, plus:
 }
 
 On the *authenticated* detail route only, `site` additionally carries
-`isPublic` and `checkIntervalSec`, which the monitor page's edit form needs to
-pre-fill. The public detail route never returns either.
+`isPublic`, which the monitor page's edit form needs to pre-fill. The public
+detail route never returns it.
 
 where `checks` is the raw 24h time series for the response-time graph:
 
@@ -90,6 +91,14 @@ nothing else. The one exception is the authenticated detail route, noted
 above, where the edit form needs it. A private site and a site that does not
 exist are indistinguishable on the public detail route - both are the same
 404, with the same body.
+
+`checkIntervalSec` is deliberately *not* treated that way. It is returned on
+every entry from every route, including both public ones. It was once gated
+to the authenticated detail route alongside isPublic, which was a mistake by
+association: isPublic is gated because it governs visibility, while
+checkIntervalSec is a check frequency that governs nothing and reveals
+nothing a caller could not infer from watching the status change. The
+dashboard needs it per site to draw an honest countdown ring.
 """
 
 import json
@@ -295,6 +304,10 @@ def site_entry(site, status, checks, now, incident_limit=INCIDENTS_PER_SITE):
         "name": site.get("name", site_id),
         "url": site.get("url"),
         "brand": site.get("brand", "Unassigned"),
+        # On every route, not just the detail one. The dashboard draws each
+        # card's countdown ring from this; without it every ring fell back to
+        # the global schedule interval and a 30s site counted down from 60.
+        "checkIntervalSec": _plain(site.get("checkIntervalSec", 60)),
         # Paused wins over whatever CurrentStatus last recorded: a site that
         # is not being checked has no current status worth reporting.
         "status": "paused" if paused else status.get("currentStatus", "unknown"),
@@ -450,12 +463,15 @@ def build_site_payload(site_id, public_only=False):
 
     if not public_only:
         # Only on the authenticated detail route, and only here. The monitor
-        # page's edit form has to pre-fill these two, and an authenticated
-        # caller can already read both from GET /admin/sites. The public
-        # routes still never echo isPublic: there it decides which sites are
-        # returned and says nothing else.
+        # page's edit form has to pre-fill it, and an authenticated caller can
+        # already read it from GET /admin/sites. The public routes still never
+        # echo isPublic: there it decides which sites are returned at all, and
+        # says nothing else.
+        #
+        # checkIntervalSec used to be gated alongside it. It no longer is - it
+        # is on every entry from site_entry() - because it is a check
+        # frequency and nothing more. Nothing is decided by keeping it secret.
         entry["isPublic"] = record.get("isPublic") is True
-        entry["checkIntervalSec"] = _plain(record.get("checkIntervalSec", 60))
 
     entry["checks"] = [
         {

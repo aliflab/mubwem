@@ -37,16 +37,22 @@
          was not already on it. -->
     <section id="toolbar" class="toolbar" aria-label="Filter services"></section>
 
-    <section id="summary" class="summary-grid" aria-label="Summary"></section>
+    <!-- Same rail-plus-grid layout as the dashboard; they share a renderer,
+         so they should not diverge in shape. -->
+    <div class="dash-layout">
+      <div class="dash-main">
+        <p id="result-count" class="result-count" hidden></p>
 
-    <p id="result-count" class="result-count" hidden></p>
+        <!-- No aria-live: the grid is fully replaced on every poll. #overall
+             in the header carries the one-line roll-up instead. -->
+        <section id="cards" class="cards"></section>
+        <p id="empty" class="empty" hidden>
+          No services are published publicly right now.
+        </p>
+      </div>
 
-    <!-- No aria-live: the grid is fully replaced on every poll. #overall in
-         the header carries the one-line roll-up instead. -->
-    <section id="cards" class="cards"></section>
-    <p id="empty" class="empty" hidden>
-      No services are published publicly right now.
-    </p>
+      <aside id="summary" class="summary-side" aria-label="Summary"></aside>
+    </div>
   </main>
 
   <footer>

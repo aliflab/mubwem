@@ -10,6 +10,9 @@
   --up: #16a34a;
   --down: #dc2626;
   --unknown: #9ca3af;
+  --link: #3f4650;
+  --link-hover: #14171c;
+  --link-underline: rgba(63, 70, 80, 0.38);
   --radius: 8px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.04);
 }
@@ -28,10 +31,42 @@
     --up: #34d399;
     --down: #f87171;
     --unknown: #a1a8b3;
+    --link: #ced4dc;
+    --link-hover: #ffffff;
+    --link-underline: rgba(206, 212, 220, 0.4);
   }
 }
 
 * { box-sizing: border-box; }
+
+/* Text links.
+   Deliberately neutral rather than an accent colour: blue is reserved here for
+   *state* - the selected brand chip, the current nav item, the primary button,
+   a focus ring - so a link borrowing it reads as "selected" rather than
+   "clickable". The underline carries the affordance instead, and hover
+   brightens the text and firms up the rule.
+
+   This is the base rule only. Every component that styles its own anchors
+   (.nav-item, .card-link, .row-link, .card-url, .crumb, .logout, footer a)
+   has class-level specificity and overrides it untouched. */
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: var(--link-underline);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--link-hover);
+  text-decoration-color: currentColor;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--link-hover);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 
 body {
   margin: 0;
@@ -129,8 +164,9 @@ main {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
+  align-content: start;
 }
 
 /* -------------------------------------------------------------------- card */
@@ -657,7 +693,7 @@ button.danger:hover:not(:disabled) {
    shell provides the width, so they just fill it. */
 .shell .topbar-inner,
 .shell main,
-.shell footer { max-width: 1180px; }
+.shell footer { max-width: 1440px; }
 
 .crumb {
   font-size: 12px;
@@ -668,14 +704,42 @@ button.danger:hover:not(:disabled) {
 .crumb:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------- summary row */
-.summary-grid {
+/* Dashboard body: monitor grid, plus a summary rail on the right. The two
+   summary cards used to be full-width banners stacked above the grid, which
+   spent a whole band of vertical space on eight numbers and left the cards
+   below it narrower than they needed to be. */
+.dash-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 20px;
+  align-items: start;
+}
+
+.dash-main { min-width: 0; }
+
+.summary-side {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  margin-bottom: 22px;
+  position: sticky;
+  top: 20px;
 }
 
 .summary-card { margin-bottom: 0; }
+
+/* Below this the rail has nowhere to go. Stack it above the grid rather than
+   forcing a side-by-side that cannot hold a stat row; on the way down the two
+   cards sit beside each other until they cannot either. */
+@media (max-width: 1000px) {
+  .dash-layout { grid-template-columns: minmax(0, 1fr); }
+  .summary-side {
+    order: -1;
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .summary-side > * { flex: 1 1 300px; }
+}
 
 .sumstat-row {
   display: grid;
@@ -715,6 +779,41 @@ button.danger:hover:not(:disabled) {
 .sumstat-up .sumstat-value { color: var(--up); }
 .sumstat-down .sumstat-value { color: var(--down); }
 .sumstat-paused .sumstat-value { color: var(--muted); }
+
+/* In a 260px rail a 2-up grid of stats leaves ~105px per column, which wraps
+   "Mean time between failures" onto three lines. One stat per line, label
+   left and value right, fits and reads better. */
+.summary-side .sumstat-row {
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.summary-side .sumstat {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-side .sumstat-label {
+  order: -1;            /* label first in the row, value pushed to the right */
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
+.summary-side .sumstat-value {
+  font-size: 17px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.summary-side .sumstat-value-empty {
+  font-size: 12px;
+  white-space: normal;
+  text-align: right;
+}
 
 /* ---------------------------------------------------------- hourly bar */
 .hourbar {
@@ -816,16 +915,47 @@ span.card-url:hover { text-decoration: none; }
   margin-top: 6px;
 }
 
-.field-check { justify-content: flex-end; }
-
-.check-label {
+/* Both switches share one full-width track, so they sit beside each other
+   instead of falling into whatever grid cells the text inputs left over. */
+.form-checks {
+  grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 10px 26px;
+  padding-top: 2px;
+}
+
+/* Two classes (0,2,0) so this beats `.field label` (0,1,1). Without it the
+   checkbox label inherited the uppercase, letter-spaced, 11px treatment meant
+   for labels sitting above a text input. */
+.form-checks .check-label,
+.field .check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
   font-size: 13px;
+  font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
   color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* `.field input { min-width: 190px }` is for text inputs. Applied to a
+   checkbox it stretched the box itself to 190px and pushed the label out to
+   the right, which is what wrapped "Public status page" onto three lines. */
+.check-label input[type="checkbox"] {
+  min-width: 0;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  border-radius: 3px;
+  accent-color: #2563eb;
 }
 
 .form-actions {

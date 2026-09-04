@@ -37,19 +37,27 @@
              All client-side over the payload already fetched. -->
         <section id="toolbar" class="toolbar" aria-label="Filter monitors"></section>
 
-        <section id="summary" class="summary-grid" aria-label="Summary"></section>
+        <!-- Summary moves into a right-hand rail so the monitor grid gets the
+             width. Below the breakpoint in style.css the rail stacks above the
+             grid instead of being squeezed into a column too narrow to hold a
+             stat row. -->
+        <div class="dash-layout">
+          <div class="dash-main">
+            <p id="result-count" class="result-count" hidden></p>
 
-        <p id="result-count" class="result-count" hidden></p>
+            <!-- No aria-live here: render() replaces every child on each 20s
+                 poll, so a live region would re-announce the whole grid.
+                 #overall above carries the one-line roll-up instead. -->
+            <section id="cards" class="cards"></section>
+            <p id="empty" class="empty" hidden>
+              No sites are being monitored yet. Add one from
+              <a href="sites.html">Monitors</a>, or seed the table with
+              <code>scripts/seed_sites.py</code>.
+            </p>
+          </div>
 
-        <!-- No aria-live here: render() replaces every child on each 20s poll,
-             so a live region would re-announce the whole grid. #overall above
-             carries the one-line roll-up instead. -->
-        <section id="cards" class="cards"></section>
-        <p id="empty" class="empty" hidden>
-          No sites are being monitored yet. Add one from
-          <a href="sites.html">Monitors</a>, or seed the table with
-          <code>scripts/seed_sites.py</code>.
-        </p>
+          <aside id="summary" class="summary-side" aria-label="Summary"></aside>
+        </div>
       </main>
 
       <footer>

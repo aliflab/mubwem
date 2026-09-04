@@ -255,9 +255,14 @@
       step: "10"
     });
 
+    // One row for both switches. Giving each its own .field cell dropped them
+    // into whatever grid tracks the text inputs left over, which is how
+    // "Public status page" ended up alone, three lines tall and nowhere near
+    // its own checkbox.
+    var checks = document.createElement("div");
+    checks.className = "form-checks";
+
     function checkbox(label, name, checked) {
-      var wrap = document.createElement("div");
-      wrap.className = "field field-check";
       var lab = document.createElement("label");
       lab.className = "check-label";
       var input = document.createElement("input");
@@ -265,13 +270,14 @@
       input.name = name;
       input.checked = Boolean(checked);
       lab.appendChild(input);
-      lab.appendChild(document.createTextNode(" " + label));
-      wrap.appendChild(lab);
-      form.appendChild(wrap);
+      // The gap between box and text is CSS now, not a leading space.
+      lab.appendChild(document.createTextNode(label));
+      checks.appendChild(lab);
     }
 
     checkbox("Enabled", "enabled", site.enabled);
     checkbox("Public status page", "isPublic", site.isPublic);
+    form.appendChild(checks);
 
     var actions = document.createElement("div");
     actions.className = "form-actions";

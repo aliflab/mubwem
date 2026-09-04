@@ -15,5 +15,10 @@
   // inlineDetails: the public page has no detail page to link a card to, so
   // the stats and incident list stay on the card itself. The dashboard sets
   // detailHref instead and moves that detail to monitor.html.
+  //
+  // The toolbar (search, status, brand, density) comes for free from the
+  // shared renderer, since it filters the payload this page already fetches.
+  // Note that switching to list density drops the inline stats and incidents:
+  // a row has nowhere to put them. Card density is the default and keeps them.
   MubwemDashboard.start({ apiUrl: API_URL, inlineDetails: true });
 })();

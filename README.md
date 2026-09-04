@@ -111,14 +111,20 @@ A persistent side navigation (`nav.js`) is shared by every authenticated page. *
 
 | Page | Who | What |
 |---|---|---|
-| `index.html` | any signed-in user | Two summary cards (current status, last 24h) over a grid of monitor cards. Each card carries the status badge, the countdown ring, a 24-bar hourly history and the 24h uptime percentage, and links through to the detail page. |
+| `index.html` | any signed-in user | A toolbar (search, status, brand, density) over two summary cards and a grid of monitor cards. Each card carries the status badge, the countdown ring, a 24-bar hourly history and the 24h uptime percentage, and links through to the detail page. |
 | `monitor.html?site=<siteId>` | any signed-in user | One monitor: the large hourly bar, the four detail stats that used to sit on the card, a Chart.js response-time graph over the last 24h, and up to 50 incidents. Admins and Editors additionally get an **Edit** form that `PATCH`es `/admin/sites/{siteId}`; a Viewer sees no edit control at all, not a disabled one. |
 | `incidents.html` | any signed-in user | Flat cross-site incident list, newest first, with a client-side filter by monitor. |
 | `sites.html` | Admins, Editors | Monitor management: the enable/public toggles, the add-site form, and (Admins only) delete. |
 | `team.html` | Admins | User management. An Editor reaching it is told why there is nothing to see. |
 | `settings.html` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
 | `integrations.html` | any signed-in user | **Stub.** The API URLs and a `curl` example. No integrations exist. |
-| `public.html` | nobody signs in | The shareable status page. Keeps the stats and incident list on the card, since it has no detail page to link to. |
+| `public.html` | nobody signs in | The shareable status page. Same toolbar and summary as the dashboard, and it keeps the stats and incident list on the card, since it has no detail page to link to. |
+
+#### Dashboard controls
+
+The toolbar filters the `/status` document the page is **already** polling: a text search over name, URL and brand; a status segment (All / Up / Down / Paused) whose counts come from the payload's `summary`; one chip per brand; and a card/list density toggle. None of it issues a request, and none of it needed a backend change — which is why there is no `?q=` or `?status=` parameter on any route.
+
+Filtering never re-sorts. The API returns sites down-first then by name, and that ordering survives every filter, which is also why brands are chips rather than grouped sections. The two summary cards keep describing the whole deployment even when a filter is narrowing the grid — they are the deployment roll-up, not a view of what is on screen — and a "Showing 3 of 8 monitors" line makes the filtered subset explicit. The status filter and density are remembered in `localStorage`; the search text and brand are not.
 
 `settings.html` and `integrations.html` are **placeholders, shipped as placeholders**. Neither has a control that changes anything, and both say so on the page. There is nothing behind them to configure yet: alerting is one SNS topic with one email subscription fixed at deploy time, and there are no webhooks, API keys or third-party targets. See the [roadmap](#roadmap-later-phases).
 

@@ -18,7 +18,7 @@
         </div>
       </div>
       <div class="meta">
-        <div id="overall" class="overall">Loading…</div>
+        <div id="overall" class="overall" aria-live="polite">Loading…</div>
         <div class="updated">Updated <span id="updated">—</span></div>
       </div>
     </div>
@@ -30,7 +30,20 @@
       monitoring dashboard requires a sign-in.
     </p>
     <div id="error" class="error" hidden></div>
-    <section id="cards" class="cards" aria-live="polite"></section>
+
+    <!-- Same toolbar and roll-up as the dashboard. Both are built from the
+         /public/status payload, which already carries the summary and only
+         ever contains sites flagged public — nothing reaches this page that
+         was not already on it. -->
+    <section id="toolbar" class="toolbar" aria-label="Filter services"></section>
+
+    <section id="summary" class="summary-grid" aria-label="Summary"></section>
+
+    <p id="result-count" class="result-count" hidden></p>
+
+    <!-- No aria-live: the grid is fully replaced on every poll. #overall in
+         the header carries the one-line roll-up instead. -->
+    <section id="cards" class="cards"></section>
     <p id="empty" class="empty" hidden>
       No services are published publicly right now.
     </p>

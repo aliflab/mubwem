@@ -19,7 +19,7 @@
             <p class="tagline">Multi-Brand Website Monitor</p>
           </div>
           <div class="meta">
-            <div id="overall" class="overall">Loading…</div>
+            <div id="overall" class="overall" aria-live="polite">Loading…</div>
             <div class="updated">Updated <span id="updated">—</span></div>
             <div class="session">
               <span id="signed-in-as"></span>
@@ -33,9 +33,18 @@
         <div id="error" class="error" hidden></div>
         <div id="notice" class="notice" hidden></div>
 
+        <!-- Populated by dashboard.js: search, status, brand and density.
+             All client-side over the payload already fetched. -->
+        <section id="toolbar" class="toolbar" aria-label="Filter monitors"></section>
+
         <section id="summary" class="summary-grid" aria-label="Summary"></section>
 
-        <section id="cards" class="cards" aria-live="polite"></section>
+        <p id="result-count" class="result-count" hidden></p>
+
+        <!-- No aria-live here: render() replaces every child on each 20s poll,
+             so a live region would re-announce the whole grid. #overall above
+             carries the one-line roll-up instead. -->
+        <section id="cards" class="cards"></section>
         <p id="empty" class="empty" hidden>
           No sites are being monitored yet. Add one from
           <a href="sites.html">Monitors</a>, or seed the table with

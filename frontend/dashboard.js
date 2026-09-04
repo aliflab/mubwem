@@ -20,12 +20,23 @@
  * public page has no detail page to send anyone to, so it sets inlineDetails
  * instead and keeps the stats and incident list on the card — otherwise the
  * public page would lose information it has always shown and gain nothing.
+ * inlineDetails has nowhere to go in a list row, so it applies to card density
+ * only.
+ *
+ * FILTERING
+ *
+ * The toolbar (search, status, brand, density) filters the payload that has
+ * already been fetched. It issues no request of its own and needs no backend
+ * support: everything it works on is in the one /status document the page was
+ * already polling. Filtering never re-sorts — the API returns sites down-first
+ * then by name, and preserving that order across every filter is the point.
  */
 window.MubwemDashboard = (function () {
   "use strict";
 
   var POLL_MS = 20000;
-  var RING_TICK_MS = 1000;
+  var TICK_MS = 1000;
+  var SKELETON_CARDS = 6;
 
   // Countdown ring geometry, in the SVG's own user units.
   var RING_R = 18;
@@ -34,7 +45,19 @@ window.MubwemDashboard = (function () {
   // The rings currently on the page. Rebuilt on every render, ticked by a
   // single shared interval rather than one timer per card.
   var rings = [];
-  var ringTimer = null;
+  var ticker = null;
+
+  // What the last poll returned, so a toolbar interaction can re-render the
+  // grid without waiting 20 seconds for the next one.
+  var lastPayload = null;
+  var lastOptions = {};
+  var generatedAt = null;
+
+  var filters = { query: "", status: "all", brand: "all", density: "cards" };
+  var VIEW_KEY = "mubwem.dashboardView";
+  var SEARCH_DEBOUNCE_MS = 120;
+
+  var toolbar = null; // built once; only its dynamic parts are updated after
 
   var el = {
     cards: document.getElementById("cards"),
@@ -42,7 +65,10 @@ window.MubwemDashboard = (function () {
     error: document.getElementById("error"),
     updated: document.getElementById("updated"),
     overall: document.getElementById("overall"),
-    summary: document.getElementById("summary")
+    summary: document.getElementById("summary"),
+    toolbar: document.getElementById("toolbar"),
+    resultCount: document.getElementById("result-count"),
+    filterEmpty: null // created on demand, below the grid
   };
 
   // ---------------------------------------------------------------- helpers
@@ -74,11 +100,28 @@ window.MubwemDashboard = (function () {
     return (secs / 86400).toFixed(1) + "d";
   }
 
+  function uptimeLabel(site, fallback) {
+    return site.uptime24h === null || site.uptime24h === undefined
+      ? fallback
+      : site.uptime24h.toFixed(2) + "%";
+  }
+
+  function brandOf(site) {
+    return site.brand || "Unassigned";
+  }
+
   function text(tag, className, value) {
     var node = document.createElement(tag);
     if (className) node.className = className;
     if (value !== undefined && value !== null) node.textContent = value;
     return node;
+  }
+
+  /* Only reassign when the string actually differs. #overall is an aria-live
+     region, and rewriting identical text on every 20s poll is how a live
+     region turns into a screen-reader metronome. */
+  function setText(node, value) {
+    if (node && node.textContent !== value) node.textContent = value;
   }
 
   // Deploy-time config.js sets the window globals. For local development,
@@ -99,6 +142,37 @@ window.MubwemDashboard = (function () {
       return localStorage.getItem(storageKey);
     } catch (e) {
       return null;
+    }
+  }
+
+  /* Remembered view state: the status filter and the density, nothing else.
+     Not the search text (stale and confusing on return) and not the brand (the
+     brand set changes as monitors are added). Same rule as the API URL above —
+     view preferences only, never anything sensitive. */
+  function loadView() {
+    var saved;
+    try {
+      saved = JSON.parse(localStorage.getItem(VIEW_KEY) || "{}");
+    } catch (e) {
+      return;
+    }
+    if (!saved || typeof saved !== "object") return;
+    if (["all", "up", "down", "paused"].indexOf(saved.status) !== -1) {
+      filters.status = saved.status;
+    }
+    if (saved.density === "list" || saved.density === "cards") {
+      filters.density = saved.density;
+    }
+  }
+
+  function saveView() {
+    try {
+      localStorage.setItem(
+        VIEW_KEY,
+        JSON.stringify({ status: filters.status, density: filters.density })
+      );
+    } catch (e) {
+      /* private browsing — the view just will not be remembered */
     }
   }
 
@@ -187,7 +261,38 @@ window.MubwemDashboard = (function () {
     });
   }
 
+  /* One second, one timer, everything time-relative on the page. The "Updated
+     Xs ago" label rides along here rather than being written once per 20s
+     poll, where it used to read "0s ago" and then sit there lying for the rest
+     of the interval. */
+  function tick() {
+    tickRings();
+    if (el.updated && generatedAt) {
+      setText(el.updated, relativeTime(generatedAt));
+    }
+  }
+
   // ------------------------------------------------------------ hourly bars
+  function bucketState(value) {
+    return value === "up" || value === "down" ? value : "none";
+  }
+
+  /* A spoken summary of the bar, since the bar itself is pure colour and the
+     per-cell title tooltips are invisible to a screen reader and to touch. */
+  function bucketSummary(buckets) {
+    var counts = { up: 0, down: 0, none: 0 };
+    for (var i = 0; i < 24; i++) counts[bucketState(buckets[i])]++;
+
+    var parts = [];
+    function part(n, singular, plural) {
+      if (n) parts.push(n + " " + (n === 1 ? singular : plural));
+    }
+    part(counts.up, "hour up", "hours up");
+    part(counts.down, "hour down", "hours down");
+    part(counts.none, "hour with no checks", "hours with no checks");
+    return "Last 24 hours: " + (parts.length ? parts.join(", ") : "no data");
+  }
+
   /* 24 bars, one per hour of the last 24 hours, oldest on the left.
 
      The buckets are computed server-side (hourly_buckets() in the API) over
@@ -198,13 +303,10 @@ window.MubwemDashboard = (function () {
     var buckets = site.hourlyBuckets || [];
     var wrap = text("div", "hourbar" + (large ? " hourbar-large" : ""), null);
     wrap.setAttribute("role", "img");
-    wrap.setAttribute(
-      "aria-label",
-      "Hourly status for the last 24 hours, oldest first"
-    );
+    wrap.setAttribute("aria-label", bucketSummary(buckets));
 
     for (var i = 0; i < 24; i++) {
-      var state = buckets[i] || "none";
+      var state = bucketState(buckets[i]);
       var bar = text("span", "hourbar-cell hourbar-" + state, null);
       var hoursAgo = 24 - i;
       bar.title =
@@ -219,15 +321,7 @@ window.MubwemDashboard = (function () {
   function renderUptimeFooter(site) {
     var row = text("div", "hourbar-foot", null);
     row.appendChild(text("span", "hourbar-scale", "24h ago"));
-    row.appendChild(
-      text(
-        "span",
-        "hourbar-pct",
-        site.uptime24h === null || site.uptime24h === undefined
-          ? "No data"
-          : site.uptime24h.toFixed(2) + "%"
-      )
-    );
+    row.appendChild(text("span", "hourbar-pct", uptimeLabel(site, "No data")));
     row.appendChild(text("span", "hourbar-scale", "now"));
     return row;
   }
@@ -279,12 +373,7 @@ window.MubwemDashboard = (function () {
         ? "—"
         : site.lastResponseTimeMs + " ms"
     );
-    stat(
-      "Uptime 24h",
-      site.uptime24h === null || site.uptime24h === undefined
-        ? "—"
-        : site.uptime24h.toFixed(2) + "%"
-    );
+    stat("Uptime 24h", uptimeLabel(site, "—"));
     stat(
       "Failures in a row",
       site.consecutiveFailures === undefined ? "—" : site.consecutiveFailures
@@ -292,20 +381,29 @@ window.MubwemDashboard = (function () {
     return stats;
   }
 
+  /* A card or a row is an <a> when there is a detail page to reach, and a
+     plain element otherwise — never a div pretending to be a link. */
+  function linkOrBlock(href, tag, className) {
+    var node = document.createElement(href ? "a" : tag);
+    node.className = className;
+    if (href) node.href = href;
+    return node;
+  }
+
   function renderCard(site, options) {
-    // A card is an <a> when there is a detail page to reach, and a plain
-    // <article> otherwise — never a div pretending to be a link.
     var href = options.detailHref ? options.detailHref(site.siteId) : null;
-    var card = document.createElement(href ? "a" : "article");
-    card.className = "card card-" + site.status + (href ? " card-link" : "");
-    if (href) card.href = href;
+    var card = linkOrBlock(
+      href,
+      "article",
+      "card card-" + site.status + (href ? " card-link" : "")
+    );
 
     var head = text("div", "card-head");
     var title = text("div", "card-title");
     title.appendChild(text("span", "dot", null));
-    var names = text("div", null);
+    var names = text("div", "card-names");
     names.appendChild(text("h2", null, site.name));
-    names.appendChild(text("p", "brand-label", site.brand || ""));
+    names.appendChild(text("p", "brand-label", brandOf(site)));
     title.appendChild(names);
     head.appendChild(title);
 
@@ -318,6 +416,7 @@ window.MubwemDashboard = (function () {
     card.appendChild(head);
 
     var url = text("span", "card-url", site.url || "");
+    url.title = site.url || "";
     card.appendChild(url);
 
     card.appendChild(renderHourlyBar(site, false));
@@ -331,10 +430,65 @@ window.MubwemDashboard = (function () {
     return card;
   }
 
+  /* The compact density. Same data as a card minus the inline detail, laid out
+     as aligned columns so thirty monitors read as a table rather than as three
+     screens of scrolling. */
+  function renderRow(site, options) {
+    var href = options.detailHref ? options.detailHref(site.siteId) : null;
+    var row = linkOrBlock(
+      href,
+      "div",
+      "monitor-row monitor-row-" + site.status + (href ? " row-link" : "")
+    );
+
+    var name = text("div", "row-name");
+    name.appendChild(text("span", "dot", null));
+    var names = text("div", "row-names");
+    names.appendChild(text("span", "row-title", site.name));
+    names.appendChild(text("span", "brand-label", brandOf(site)));
+    name.appendChild(names);
+    row.appendChild(name);
+
+    row.appendChild(
+      text("span", "badge badge-" + site.status, site.status.toUpperCase())
+    );
+
+    var bar = text("div", "row-bar");
+    bar.appendChild(renderHourlyBar(site, false));
+    row.appendChild(bar);
+
+    row.appendChild(text("span", "row-uptime", uptimeLabel(site, "—")));
+    row.appendChild(
+      text(
+        "span",
+        "row-checked",
+        site.status === "paused" ? "paused" : relativeTime(site.lastCheckedAt)
+      )
+    );
+    row.appendChild(renderRing(site));
+
+    return row;
+  }
+
+  function listHeader() {
+    var head = text("div", "monitor-list-head");
+    ["Monitor", "Status", "Last 24 hours", "Uptime", "Checked", "Next"].forEach(
+      function (label) {
+        head.appendChild(text("span", null, label));
+      }
+    );
+    return head;
+  }
+
   // ------------------------------------------------------------------ summary
-  function statBlock(label, value, modifier) {
+  function statBlock(label, value, modifier, isEmpty) {
     var block = text("div", "sumstat" + (modifier ? " sumstat-" + modifier : ""));
-    block.appendChild(text("span", "sumstat-value", value));
+    // A placeholder is a sentence, not a measurement. Rendering "Not enough
+    // data yet" at the same 20px/700 tabular-nums as a real number made the
+    // absence of data louder than the data.
+    block.appendChild(
+      text("span", "sumstat-value" + (isEmpty ? " sumstat-value-empty" : ""), value)
+    );
     block.appendChild(text("span", "sumstat-label", label));
     return block;
   }
@@ -354,27 +508,39 @@ window.MubwemDashboard = (function () {
     current.appendChild(currentRow);
     el.summary.appendChild(current);
 
+    var uptime = summary.overallUptime24h;
+    var hasUptime = uptime !== null && uptime !== undefined;
+    // null on these two means "not enough incident history to compute an
+    // interval", which is not the same as zero — say so rather than showing a
+    // number that reads like a measurement.
+    var mtbf = span(summary.mtbfSeconds);
+    var since = span(summary.timeSinceLastIncidentSeconds);
+
     var day = text("section", "panel summary-card");
     day.appendChild(text("h2", null, "Last 24 hours"));
     var dayRow = text("div", "sumstat-row");
     dayRow.appendChild(
       statBlock(
         "Overall uptime",
-        summary.overallUptime24h === null || summary.overallUptime24h === undefined
-          ? "No data yet"
-          : summary.overallUptime24h.toFixed(2) + "%"
+        hasUptime ? uptime.toFixed(2) + "%" : "No data yet",
+        null,
+        !hasUptime
       )
     );
-    // null here means "not enough incident history to compute an interval",
-    // which is not the same as zero — say so rather than showing a number
-    // that reads like a measurement.
     dayRow.appendChild(
-      statBlock("Mean time between failures", span(summary.mtbfSeconds) || "Not enough data yet")
+      statBlock(
+        "Mean time between failures",
+        mtbf || "Not enough data yet",
+        null,
+        !mtbf
+      )
     );
     dayRow.appendChild(
       statBlock(
         "Since last incident",
-        span(summary.timeSinceLastIncidentSeconds) || "No incidents recorded"
+        since || "No incidents recorded",
+        null,
+        !since
       )
     );
     dayRow.appendChild(statBlock("Incidents", summary.incidentCount24h));
@@ -390,51 +556,364 @@ window.MubwemDashboard = (function () {
     var active = total - paused;
 
     if (total === 0) {
-      el.overall.textContent = "No sites monitored";
+      setText(el.overall, "No sites monitored");
       el.overall.className = "overall overall-unknown";
     } else if (down === 0) {
       // Paused sites are counted separately: saying "all 7 operational" when
       // two of them are switched off is the miscount this replaces.
-      el.overall.textContent =
+      setText(
+        el.overall,
         "All " + active + " active sites operational" +
-        (paused ? " · " + paused + " paused" : "");
+          (paused ? " · " + paused + " paused" : "")
+      );
       el.overall.className = "overall overall-up";
     } else {
-      el.overall.textContent =
+      setText(
+        el.overall,
         down + " of " + active + " active sites down" +
-        (paused ? " · " + paused + " paused" : "");
+          (paused ? " · " + paused + " paused" : "")
+      );
       el.overall.className = "overall overall-down";
     }
   }
 
-  function render(payload, options) {
-    var sites = payload.sites || [];
+  // ------------------------------------------------------------------ toolbar
+  function segButton(label, value, onPick) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "seg";
+    button.setAttribute("data-value", value);
+    button.appendChild(text("span", "seg-label", label));
+    button.addEventListener("click", function () {
+      onPick(value);
+    });
+    return button;
+  }
+
+  function syncSegGroup(group, active) {
+    Object.keys(group).forEach(function (value) {
+      var on = value === active;
+      group[value].button.className = "seg" + (on ? " seg-on" : "");
+      group[value].button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  function buildToolbar() {
+    var nodes = { statusGroup: {}, densityGroup: {}, brandButtons: {} };
+
+    var row = text("div", "toolbar-row");
+
+    var search = document.createElement("input");
+    search.type = "search";
+    search.className = "toolbar-search";
+    search.placeholder = "Search monitors…";
+    search.setAttribute("aria-label", "Search monitors by name, URL or brand");
+    search.value = filters.query;
+    var debounce = null;
+    search.addEventListener("input", function () {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(function () {
+        filters.query = search.value;
+        renderGrid();
+      }, SEARCH_DEBOUNCE_MS);
+    });
+    row.appendChild(search);
+
+    var statusWrap = text("div", "segmented");
+    statusWrap.setAttribute("role", "group");
+    statusWrap.setAttribute("aria-label", "Filter by status");
+    [
+      ["All", "all"],
+      ["Up", "up"],
+      ["Down", "down"],
+      ["Paused", "paused"]
+    ].forEach(function (pair) {
+      var button = segButton(pair[0], pair[1], function (value) {
+        filters.status = value;
+        syncSegGroup(nodes.statusGroup, value);
+        saveView();
+        renderGrid();
+      });
+      var count = text("span", "seg-count", "");
+      button.appendChild(count);
+      nodes.statusGroup[pair[1]] = { button: button, count: count };
+      statusWrap.appendChild(button);
+    });
+    row.appendChild(statusWrap);
+
+    var densityWrap = text("div", "segmented");
+    densityWrap.setAttribute("role", "group");
+    densityWrap.setAttribute("aria-label", "Display density");
+    [
+      ["Cards", "cards"],
+      ["List", "list"]
+    ].forEach(function (pair) {
+      var button = segButton(pair[0], pair[1], function (value) {
+        filters.density = value;
+        syncSegGroup(nodes.densityGroup, value);
+        saveView();
+        renderGrid();
+      });
+      nodes.densityGroup[pair[1]] = { button: button };
+      densityWrap.appendChild(button);
+    });
+    row.appendChild(densityWrap);
+
+    el.toolbar.appendChild(row);
+
+    nodes.brandRow = text("div", "chip-row");
+    nodes.brandRow.setAttribute("role", "group");
+    nodes.brandRow.setAttribute("aria-label", "Filter by brand");
+    nodes.brandRow.hidden = true;
+    el.toolbar.appendChild(nodes.brandRow);
+
+    nodes.brandKey = null;
+    syncSegGroup(nodes.statusGroup, filters.status);
+    syncSegGroup(nodes.densityGroup, filters.density);
+    return nodes;
+  }
+
+  function syncBrandChips() {
+    if (!toolbar || !toolbar.brandButtons) return;
+    Object.keys(toolbar.brandButtons).forEach(function (value) {
+      var on = value === filters.brand;
+      var button = toolbar.brandButtons[value].button;
+      button.className = "chip" + (on ? " chip-on" : "");
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  function updateStatusCounts(summary) {
+    if (!summary) return;
+    var counts = {
+      all: summary.totalMonitors,
+      up: summary.upCount,
+      down: summary.downCount,
+      paused: summary.pausedCount
+    };
+    Object.keys(toolbar.statusGroup).forEach(function (value) {
+      var entry = toolbar.statusGroup[value];
+      var n = counts[value];
+      setText(entry.count, n === undefined ? "" : String(n));
+      // A status nobody has cannot be filtered to; say so rather than letting
+      // someone click into a guaranteed-empty grid.
+      entry.button.disabled = value !== "all" && !n;
+      if (entry.button.disabled && filters.status === value) {
+        filters.status = "all";
+        syncSegGroup(toolbar.statusGroup, "all");
+        saveView();
+      }
+    });
+  }
+
+  function updateBrandChips(sites) {
+    var counts = {};
+    var order = [];
+    sites.forEach(function (site) {
+      var brand = brandOf(site);
+      if (counts[brand] === undefined) {
+        counts[brand] = 0;
+        order.push(brand);
+      }
+      counts[brand]++;
+    });
+    order.sort(function (a, b) {
+      return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+    });
+
+    // One brand (or none) is not a dimension worth a filter row.
+    if (order.length < 2) {
+      toolbar.brandRow.hidden = true;
+      toolbar.brandKey = null;
+      if (filters.brand !== "all") filters.brand = "all";
+      return;
+    }
+
+    // Rebuild only when the set of brands actually changes, so a 20s poll
+    // cannot yank a chip out from under a click.
+    var key = order.join(String.fromCharCode(10));
+    if (key !== toolbar.brandKey) {
+      toolbar.brandKey = key;
+      toolbar.brandButtons = {};
+      toolbar.brandRow.innerHTML = "";
+
+      var chip = function (label, value, count) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "chip";
+        button.appendChild(text("span", null, label));
+        if (count !== null) button.appendChild(text("span", "chip-count", count));
+        button.addEventListener("click", function () {
+          filters.brand = value;
+          syncBrandChips();
+          renderGrid();
+        });
+        toolbar.brandButtons[value] = { button: button };
+        toolbar.brandRow.appendChild(button);
+      };
+
+      chip("All brands", "all", null);
+      order.forEach(function (brand) {
+        chip(brand, brand, counts[brand]);
+      });
+
+      if (!toolbar.brandButtons[filters.brand]) filters.brand = "all";
+    }
+
+    toolbar.brandRow.hidden = false;
+    syncBrandChips();
+  }
+
+  function ensureToolbar(payload) {
+    if (!el.toolbar) return;
+    if (!toolbar) toolbar = buildToolbar();
+    updateStatusCounts(payload.summary);
+    updateBrandChips(payload.sites || []);
+  }
+
+  // ------------------------------------------------------------------ filters
+  function filtersActive() {
+    return (
+      filters.query.trim() !== "" ||
+      filters.status !== "all" ||
+      filters.brand !== "all"
+    );
+  }
+
+  function visibleSites(sites) {
+    var q = filters.query.trim().toLowerCase();
+    return sites.filter(function (site) {
+      if (filters.status !== "all" && site.status !== filters.status) return false;
+      if (filters.brand !== "all" && brandOf(site) !== filters.brand) return false;
+      if (!q) return true;
+      return (
+        String(site.name || "").toLowerCase().indexOf(q) !== -1 ||
+        String(site.url || "").toLowerCase().indexOf(q) !== -1 ||
+        brandOf(site).toLowerCase().indexOf(q) !== -1
+      );
+    });
+  }
+
+  function clearFilters() {
+    filters.query = "";
+    filters.status = "all";
+    filters.brand = "all";
+    if (toolbar) {
+      var search = el.toolbar.querySelector(".toolbar-search");
+      if (search) search.value = "";
+      syncSegGroup(toolbar.statusGroup, "all");
+      syncBrandChips();
+    }
+    saveView();
+    renderGrid();
+  }
+
+  /* "Nothing matches your filters" and "nothing is being monitored" are
+     different problems with different fixes; the page used to show the same
+     message for both. */
+  function filterEmptyNode() {
+    if (el.filterEmpty) return el.filterEmpty;
+    if (!el.cards || !el.cards.parentNode) return null;
+
+    var node = text("div", "filter-empty", null);
+    node.hidden = true;
+    node.appendChild(text("p", null, "No monitors match these filters."));
+    var button = text("button", null, "Clear filters");
+    button.type = "button";
+    button.addEventListener("click", clearFilters);
+    node.appendChild(button);
+
+    el.cards.parentNode.insertBefore(node, el.cards.nextSibling);
+    el.filterEmpty = node;
+    return node;
+  }
+
+  function updateCounts(total, shown) {
+    if (el.resultCount) {
+      if (filtersActive() && total > 0) {
+        el.resultCount.hidden = false;
+        setText(
+          el.resultCount,
+          "Showing " + shown + " of " + total +
+            (total === 1 ? " monitor" : " monitors")
+        );
+      } else {
+        el.resultCount.hidden = true;
+      }
+    }
+
+    var noneAtAll = total === 0;
+    var filteredOut = total > 0 && shown === 0;
+    if (el.empty) el.empty.hidden = !noneAtAll;
+    var node = filterEmptyNode();
+    if (node) node.hidden = !filteredOut;
+  }
+
+  // ------------------------------------------------------------------ grid
+  function renderSkeleton() {
+    if (!el.cards) return;
+    el.cards.className = "cards";
+    el.cards.setAttribute("aria-busy", "true");
+    el.cards.innerHTML = "";
+    for (var i = 0; i < SKELETON_CARDS; i++) {
+      var card = text("div", "card card-skeleton", null);
+      card.setAttribute("aria-hidden", "true");
+      card.appendChild(text("span", "sk sk-title", null));
+      card.appendChild(text("span", "sk sk-url", null));
+      card.appendChild(text("span", "sk sk-bar", null));
+      card.appendChild(text("span", "sk sk-foot", null));
+      el.cards.appendChild(card);
+    }
+  }
+
+  function renderGrid() {
+    if (!el.cards) return;
+    var sites = (lastPayload && lastPayload.sites) || [];
+    var shown = visibleSites(sites);
+    var list = filters.density === "list";
+
     // The old ring nodes are about to be thrown away with the cards; drop the
     // references too, or the ticker keeps writing to detached elements.
     rings = [];
+    el.cards.className = list ? "monitor-list" : "cards";
     el.cards.innerHTML = "";
-    sites.forEach(function (site) {
-      el.cards.appendChild(renderCard(site, options));
+
+    if (list && shown.length) el.cards.appendChild(listHeader());
+    shown.forEach(function (site) {
+      el.cards.appendChild(
+        list ? renderRow(site, lastOptions) : renderCard(site, lastOptions)
+      );
     });
-    el.empty.hidden = sites.length > 0;
-    if (el.updated) el.updated.textContent = relativeTime(payload.generatedAt);
+
+    updateCounts(sites.length, shown.length);
+    tick();
+  }
+
+  function render(payload, options) {
+    lastPayload = payload;
+    lastOptions = options || {};
+    generatedAt = payload.generatedAt;
+
+    if (el.cards) el.cards.removeAttribute("aria-busy");
+    ensureToolbar(payload);
     renderSummary(payload.summary);
-    renderOverall(payload.summary, sites);
+    renderOverall(payload.summary, payload.sites || []);
+    renderGrid();
 
     // Once per second, independent of the 20s poll, so the countdown moves
     // instead of jumping a third of a minute at a time.
-    tickRings();
-    if (!ringTimer) ringTimer = setInterval(tickRings, RING_TICK_MS);
+    if (!ticker) ticker = setInterval(tick, TICK_MS);
   }
 
   function showError(message) {
+    if (!el.error) return;
     el.error.textContent = message;
     el.error.hidden = false;
   }
 
   function setOverall(message, modifier) {
     if (!el.overall) return;
-    el.overall.textContent = message;
+    setText(el.overall, message);
     el.overall.className = "overall overall-" + (modifier || "unknown");
   }
 
@@ -452,6 +931,9 @@ window.MubwemDashboard = (function () {
       );
       return;
     }
+
+    loadView();
+    renderSkeleton();
 
     function refresh() {
       var requestHeaders;
@@ -478,7 +960,7 @@ window.MubwemDashboard = (function () {
           return res.json();
         })
         .then(function (payload) {
-          el.error.hidden = true;
+          if (el.error) el.error.hidden = true;
           render(payload, opts);
         })
         .catch(function (err) {
@@ -486,6 +968,7 @@ window.MubwemDashboard = (function () {
             onUnauthorized();
             return;
           }
+          if (el.cards) el.cards.removeAttribute("aria-busy");
           showError("Could not load status: " + err.message);
         });
     }

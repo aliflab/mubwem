@@ -22,6 +22,12 @@
     --text: #e8eaed;
     --muted: #9aa3af;
     --shadow: none;
+    /* The light-mode greens and reds are tuned for white. On #101317 they
+       drop under 4.5:1 for the small text and 3px bars that use them, so the
+       dark theme gets its own, lighter pair. */
+    --up: #34d399;
+    --down: #f87171;
+    --unknown: #a1a8b3;
   }
 }
 
@@ -123,7 +129,7 @@ main {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 16px;
 }
 
@@ -147,8 +153,22 @@ main {
   gap: 10px;
 }
 
-.card-title { display: flex; gap: 10px; align-items: center; }
-.card-title h2 { margin: 0; font-size: 15px; }
+.card-title {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;               /* lets the name ellipsis instead of overflowing */
+}
+
+.card-names { min-width: 0; }
+
+.card-title h2 {
+  margin: 0;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .brand-label {
   margin: 1px 0 0;
@@ -189,6 +209,18 @@ main {
   font-size: 12px;
   color: var(--muted);
   text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Truncation is right on a fixed-width card. It is wrong in an admin table
+   cell and wrong on the monitor detail page, where there is horizontal room
+   and the full URL is the point. */
+.cell-url .card-url,
+#site-url.card-url {
+  white-space: normal;
+  overflow: visible;
   word-break: break-all;
 }
 
@@ -661,9 +693,17 @@ button.danger:hover:not(:disabled) {
   letter-spacing: -0.01em;
 }
 
-/* A placeholder is a sentence, not a number — shrink it so it does not
-   masquerade as a measurement. */
-.sumstat-value:not(:empty) { line-height: 1.25; }
+/* A placeholder is a sentence, not a number. Rendered at the same 20px/700
+   tabular-nums as a real figure, "Not enough data yet" wrapped to three lines
+   and shouted louder than the numbers beside it. */
+.sumstat-value-empty {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--muted);
+  font-variant-numeric: normal;
+  letter-spacing: 0;
+}
 
 .sumstat-label {
   font-size: 11px;
@@ -732,8 +772,11 @@ button.danger:hover:not(:disabled) {
 
 .card-link:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 
-.card-paused { border-left-color: var(--unknown); opacity: 0.82; }
+/* No opacity here: dimming the whole card took the name and the URL below
+   contrast too. The muted border, dot and badge carry "paused" on their own. */
+.card-paused { border-left-color: var(--unknown); }
 .card-paused .dot { background: var(--unknown); }
+.card-paused .hourbar { opacity: 0.6; }
 .badge-paused { background: rgba(156, 163, 175, 0.18); color: var(--muted); }
 
 /* card-url is a span on the dashboard now (the whole card is the link), so
@@ -852,4 +895,328 @@ span.card-url:hover { text-decoration: none; }
   font-size: 12.5px;
   overflow-x: auto;
   white-space: pre;
+}
+
+/* ==========================================================================
+   Dashboard toolbar — search, status, brand, density
+   Everything here filters the payload the page already fetched; no control in
+   this block issues a request.
+   ========================================================================== */
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.toolbar:empty { display: none; }
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+  max-width: 380px;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 11px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.toolbar-search:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  border-color: #2563eb;
+}
+
+/* ------------------------------------------------------- segmented control */
+.segmented {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.segmented .seg {
+  font: inherit;
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented .seg:hover:not(:disabled):not(.seg-on) {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.segmented .seg-on {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+
+.segmented .seg:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.segmented .seg:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+.seg-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(107, 114, 128, 0.16);
+}
+
+.seg-count:empty { display: none; }
+.seg-on .seg-count { background: rgba(37, 99, 235, 0.16); color: #2563eb; }
+
+/* ------------------------------------------------------------- brand chips */
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover:not(.chip-on) { border-color: var(--muted); color: var(--text); }
+
+.chip-on {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.4);
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.chip:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+
+.chip-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* Under a phone width the chip row scrolls sideways rather than wrapping into
+   four stacked lines above the content. */
+@media (max-width: 640px) {
+  .chip-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .toolbar-search { max-width: none; }
+}
+
+/* --------------------------------------------------- counts + empty states */
+.result-count {
+  margin: -6px 0 14px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 26px 20px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.filter-empty p { margin: 0; }
+
+/* ==========================================================================
+   List density
+   ========================================================================== */
+.monitor-list {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.monitor-list-head,
+.monitor-row {
+  display: grid;
+  grid-template-columns:
+    minmax(160px, 2.2fr) 78px minmax(150px, 2fr) 78px 92px 52px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+}
+
+.monitor-list-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.monitor-row {
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--unknown);
+  color: inherit;
+  text-decoration: none;
+}
+
+.monitor-row:last-child { border-bottom: none; }
+.monitor-row-up { border-left-color: var(--up); }
+.monitor-row-down { border-left-color: var(--down); }
+.monitor-row-paused { border-left-color: var(--unknown); }
+.monitor-row-paused .hourbar { opacity: 0.6; }
+
+.row-link:hover { background: var(--bg); }
+.row-link:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
+
+.row-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.monitor-row-up .dot { background: var(--up); }
+.monitor-row-down .dot { background: var(--down); }
+
+.row-names { min-width: 0; display: flex; flex-direction: column; }
+
+.row-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-names .brand-label { margin: 0; }
+
+/* The bar is already margined for a card; inside a row it needs neither. */
+.row-bar .hourbar { margin: 0; height: 20px; }
+
+.row-uptime {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.row-checked { font-size: 12px; color: var(--muted); }
+
+.monitor-row .ring { width: 34px; height: 34px; }
+.monitor-row .ring-svg { width: 34px; height: 34px; }
+
+/* Six aligned columns do not survive a phone. Below this width each row
+   becomes a stacked block, the same shape a card already takes. */
+@media (max-width: 860px) {
+  .monitor-list-head { display: none; }
+  .monitor-list {
+    background: none;
+    border: none;
+    box-shadow: none;
+    gap: 10px;
+  }
+  .monitor-row {
+    grid-template-columns: 1fr auto auto auto;
+    grid-template-areas:
+      "name   name    name  badge"
+      "bar    bar     bar   bar"
+      "uptime checked .     ring";
+    gap: 8px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius);
+  }
+  .monitor-row > .row-name { grid-area: name; }
+  .monitor-row > .badge { grid-area: badge; justify-self: end; }
+  .monitor-row > .row-bar { grid-area: bar; }
+  .monitor-row > .row-uptime { grid-area: uptime; text-align: left; }
+  .monitor-row > .row-checked { grid-area: checked; }
+  .monitor-row > .ring { grid-area: ring; justify-self: end; }
+}
+
+/* ==========================================================================
+   Loading skeleton — drawn between sign-in and the first payload, which spans
+   a Cognito round trip and used to be a blank rectangle.
+   ========================================================================== */
+.card-skeleton {
+  border-left-color: var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.sk {
+  display: block;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--border) 0%,
+    var(--bg) 50%,
+    var(--border) 100%
+  );
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+
+.sk-title { height: 16px; width: 55%; }
+.sk-url { height: 10px; width: 80%; }
+.sk-bar { height: 26px; width: 100%; }
+.sk-foot { height: 10px; width: 40%; }
+
+@keyframes sk-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk { animation: none; background: var(--border); }
+  .card-link:hover { transform: none; }
 }

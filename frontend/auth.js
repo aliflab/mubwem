@@ -25,20 +25,28 @@ window.MubwemAuth = (function () {
   // cannot start with a valid token and arrive with a stale one.
   var EXPIRY_SKEW_MS = 60000;
 
-  /* Which registered callback URL this page uses. The admin panel is its own
-     page and its own callback, so signing in from /admin.html returns to
-     /admin.html rather than dumping the user on the dashboard. The value has
-     to match a callback URL in the app client character for character, which
-     is why it comes from the deploy-generated config rather than from
-     window.location. */
+  /* Which registered callback URL this page uses.
+
+     Every authenticated page is its own callback, so signing in from
+     /incidents.html returns there rather than dumping the user on the
+     dashboard. The value has to match a callback URL in the app client
+     character for character, which is why the candidates come from the
+     deploy-generated config and this only ever *selects* one - it never
+     invents a URL. Anything unrecognised falls back to the dashboard root,
+     which is always registered.
+
+     Note the query string is deliberately not part of it: Cognito appends its
+     own ?code=, so a page carrying state in the query (monitor.html?site=...)
+     has to remember that itself. */
   function redirectUri() {
-    var path = window.location.pathname || "";
-    if (/admin\.html$/.test(path) && window.MUBWEM_ADMIN_REDIRECT_URI) {
-      return window.MUBWEM_ADMIN_REDIRECT_URI;
+    var here = window.location.origin + (window.location.pathname || "");
+    var known = window.MUBWEM_REDIRECT_URIS;
+    if (Object.prototype.toString.call(known) === "[object Array]") {
+      for (var i = 0; i < known.length; i++) {
+        if (known[i] === here) return known[i];
+      }
     }
-    return (
-      window.MUBWEM_REDIRECT_URI || window.location.origin + path
-    );
+    return window.MUBWEM_REDIRECT_URI || window.location.origin + "/";
   }
 
   function config() {
@@ -179,8 +187,9 @@ window.MubwemAuth = (function () {
     }
     var params = new URLSearchParams({
       client_id: cfg.clientId,
-      // Always back to the dashboard root, never to /admin.html: landing on a
-      // page that immediately redirects to the hosted UI is not a logout.
+      // Always back to the dashboard root, never to whichever authenticated
+      // page we happen to be on: landing somewhere that immediately redirects
+      // to the hosted UI is not a logout.
       logout_uri:
         window.MUBWEM_REDIRECT_URI || window.location.origin + "/"
     });

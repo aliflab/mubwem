@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Incidents</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23dc2626'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <nav id="sidenav" class="sidenav" aria-label="Main"></nav>
+
+    <div class="shell-main">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div>
+            <h1>Incidents</h1>
+            <p class="tagline">Across every monitor</p>
+          </div>
+          <div class="meta">
+            <div id="overall" class="overall">Loading…</div>
+            <div class="updated">Updated <span id="updated">—</span></div>
+            <div class="session">
+              <span id="signed-in-as"></span>
+              <a href="#" id="logout" class="logout" hidden>Log out</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div id="error" class="error" hidden></div>
+        <div id="notice" class="notice" hidden></div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Recent incidents</h2>
+              <p class="panel-hint" id="scope-note"></p>
+            </div>
+            <div class="field">
+              <label for="site-filter">Filter by monitor</label>
+              <select id="site-filter">
+                <option value="">All monitors</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-scroll">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Monitor</th>
+                  <th>Started</th>
+                  <th>Duration</th>
+                  <th>Trigger</th>
+                </tr>
+              </thead>
+              <tbody id="incident-rows"></tbody>
+            </table>
+          </div>
+          <p id="incidents-empty" class="loading">Loading incidents…</p>
+        </section>
+      </main>
+
+      <footer>
+        <span>Incident history is retained until its monitor is deleted.</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="nav.js"></script>
+  <script src="shell.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="incidents.js"></script>
+</body>
+</html>

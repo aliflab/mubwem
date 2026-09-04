@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Monitor</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%2316a34a'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <nav id="sidenav" class="sidenav" aria-label="Main"></nav>
+
+    <div class="shell-main">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div>
+            <a href="index.html" class="crumb">← Dashboard</a>
+            <h1 id="site-name">Monitor</h1>
+            <p class="tagline" id="site-brand"></p>
+          </div>
+          <div class="meta">
+            <div id="overall" class="overall">Loading…</div>
+            <div class="updated">Updated <span id="updated">—</span></div>
+            <div class="session">
+              <span id="signed-in-as"></span>
+              <a href="#" id="logout" class="logout" hidden>Log out</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div id="error" class="error" hidden></div>
+        <div id="notice" class="notice" hidden></div>
+
+        <section class="panel" id="overview" hidden>
+          <div class="detail-head">
+            <div>
+              <span id="site-badge" class="badge">—</span>
+              <a id="site-url" class="card-url" target="_blank" rel="noopener noreferrer"></a>
+            </div>
+            <!-- Rendered only for Admins and Editors — see monitor.js. -->
+            <button type="button" id="edit-toggle" class="primary" hidden>Edit monitor</button>
+          </div>
+
+          <div id="hourbar-host"></div>
+          <div id="hourbar-foot"></div>
+          <dl class="stats" id="detail-stats"></dl>
+        </section>
+
+        <!-- Injected by monitor.js only when the caller may actually submit it. -->
+        <section class="panel" id="edit-panel" hidden></section>
+
+        <section class="panel" id="chart-panel" hidden>
+          <h2>Response time — last 24 hours</h2>
+          <p class="panel-hint" id="chart-hint"></p>
+          <div class="chart-wrap"><canvas id="response-chart"></canvas></div>
+        </section>
+
+        <section class="panel" id="incidents-panel" hidden>
+          <h2>Incidents</h2>
+          <p class="panel-hint">Up to the 50 most recent incidents for this monitor.</p>
+          <div id="incidents-host"></div>
+        </section>
+      </main>
+
+      <footer>
+        <span>Response times are measured from ap-southeast-2.</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <!-- Chart.js, pinned. UMD build, so it defines a global `Chart` with no
+       bundler and no build step — the same way everything else here works. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="auth.js"></script>
+  <script src="nav.js"></script>
+  <script src="shell.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="monitor.js"></script>
+</body>
+</html>

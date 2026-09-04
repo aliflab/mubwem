@@ -518,3 +518,338 @@ button.danger:hover:not(:disabled) {
 }
 
 .loading { color: var(--muted); font-size: 13px; }
+
+/* ==========================================================================
+   Shell: persistent side navigation + content column
+   ========================================================================== */
+.shell {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+.shell-main {
+  flex: 1 1 auto;
+  min-width: 0;               /* lets wide tables scroll instead of pushing */
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-main > footer { margin-top: auto; }
+
+.sidenav {
+  flex: none;
+  width: 216px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.nav-brand-text { font-weight: 700; letter-spacing: -0.01em; }
+
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav-item:hover { background: var(--bg); color: var(--text); }
+
+.nav-item-current {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.nav-icon { width: 16px; text-align: center; flex: none; }
+
+.nav-foot {
+  margin-top: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.nav-foot a { color: var(--muted); }
+
+/* The sidebar becomes a horizontal strip on narrow screens rather than
+   eating half the width. */
+@media (max-width: 720px) {
+  .shell { flex-direction: column; }
+  .sidenav {
+    width: auto;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+  }
+  .nav-list { flex-direction: row; }
+  .nav-brand-text { display: none; }
+  .nav-foot { display: none; }
+}
+
+/* The topbar and main are no longer the page's own centred column — the
+   shell provides the width, so they just fill it. */
+.shell .topbar-inner,
+.shell main,
+.shell footer { max-width: 1180px; }
+
+.crumb {
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.crumb:hover { text-decoration: underline; }
+
+/* ------------------------------------------------------------- summary row */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.summary-card { margin-bottom: 0; }
+
+.sumstat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.sumstat { display: flex; flex-direction: column; gap: 3px; }
+
+.sumstat-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* A placeholder is a sentence, not a number — shrink it so it does not
+   masquerade as a measurement. */
+.sumstat-value:not(:empty) { line-height: 1.25; }
+
+.sumstat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sumstat-up .sumstat-value { color: var(--up); }
+.sumstat-down .sumstat-value { color: var(--down); }
+.sumstat-paused .sumstat-value { color: var(--muted); }
+
+/* ---------------------------------------------------------- hourly bar */
+.hourbar {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  margin: 14px 0 6px;
+  height: 26px;
+}
+
+.hourbar-cell {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--unknown);
+}
+
+.hourbar-up { background: var(--up); }
+.hourbar-down { background: var(--down); }
+.hourbar-none { background: var(--border); }
+
+.hourbar-large { height: 46px; gap: 3px; }
+.hourbar-large .hourbar-cell { border-radius: 3px; }
+
+.hourbar-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hourbar-scale { text-transform: uppercase; letter-spacing: 0.04em; }
+
+.hourbar-pct {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------- clickable cards */
+.card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.card-link:hover {
+  border-color: var(--muted);
+  transform: translateY(-1px);
+}
+
+.card-link:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+
+.card-paused { border-left-color: var(--unknown); opacity: 0.82; }
+.card-paused .dot { background: var(--unknown); }
+.badge-paused { background: rgba(156, 163, 175, 0.18); color: var(--muted); }
+
+/* card-url is a span on the dashboard now (the whole card is the link), so
+   it must not look clickable on its own there. */
+span.card-url { cursor: inherit; }
+span.card-url:hover { text-decoration: none; }
+
+/* ------------------------------------------------------- monitor detail */
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.chart-wrap { position: relative; height: 300px; margin-top: 8px; }
+
+.panel-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.panel-head h2 { margin: 0 0 4px; font-size: 16px; }
+.panel-head .panel-hint { margin: 0; max-width: 62ch; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-top: 6px;
+}
+
+.field-check { justify-content: flex-end; }
+
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+/* ------------------------------------------------------------- incidents */
+.row-open td { background: rgba(220, 38, 38, 0.05); }
+.cell-open { color: var(--down); font-weight: 600; }
+.cell-reason { color: var(--muted); max-width: 420px; }
+
+/* ------------------------------------------------------------ stub pages */
+.stub-banner {
+  margin-bottom: 22px;
+  padding: 13px 15px;
+  border-radius: var(--radius);
+  background: rgba(245, 158, 11, 0.09);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.stub-banner strong { display: block; margin-bottom: 2px; }
+
+.config-list {
+  display: grid;
+  grid-template-columns: minmax(140px, auto) 1fr;
+  gap: 10px 20px;
+  margin: 14px 0 0;
+  align-items: baseline;
+}
+
+.config-list dt {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.config-list dd { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.config-value {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.config-note { font-size: 12px; color: var(--muted); }
+
+.todo-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.code-block {
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  overflow-x: auto;
+  white-space: pre;
+}

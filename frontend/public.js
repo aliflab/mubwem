@@ -12,5 +12,8 @@
     "mubwem.publicApiUrl"
   );
 
-  MubwemDashboard.start({ apiUrl: API_URL });
+  // inlineDetails: the public page has no detail page to link a card to, so
+  // the stats and incident list stay on the card itself. The dashboard sets
+  // detailHref instead and moves that detail to monitor.html.
+  MubwemDashboard.start({ apiUrl: API_URL, inlineDetails: true });
 })();

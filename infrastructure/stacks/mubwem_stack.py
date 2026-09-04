@@ -24,6 +24,7 @@ arrives as CDK context, so this stack can be redeployed into any account
 without editing code.
 """
 
+import json
 import os
 import re
 
@@ -336,10 +337,21 @@ class MubwemStack(Stack):
         # URI the browser sends has to match a callback URL character for
         # character.
         redirect_uri = dashboard_url + "/"
-        # The admin panel is a separate page, so it needs its own registered
-        # callback: landing back on "/" after signing in from /admin.html would
-        # drop the user on the dashboard instead of where they were going.
-        admin_redirect_uri = dashboard_url + "/admin.html"
+        # Every authenticated page is its own registered callback. The hosted
+        # UI has to return the user to the page they were on, and the redirect
+        # URI it is given must match a callback URL character for character -
+        # so signing in from /incidents.html and landing back on "/" is not an
+        # option. Public pages are absent on purpose: they never sign in.
+        AUTHENTICATED_PAGES = (
+            "monitor.html",
+            "incidents.html",
+            "team.html",
+            "sites.html",
+            "settings.html",
+            "integrations.html",
+        )
+        page_redirect_uris = [dashboard_url + "/" + page for page in AUTHENTICATED_PAGES]
+        all_redirect_uris = [redirect_uri] + page_redirect_uris
 
         # Public client - a static page cannot keep a secret, so there is none.
         # Authorization code + PKCE is what the frontend actually runs.
@@ -358,10 +370,10 @@ class MubwemStack(Stack):
                     implicit_code_grant=False,
                 ),
                 scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
-                callback_urls=[redirect_uri, admin_redirect_uri],
-                # Sign-out always lands on the dashboard root, never on
-                # /admin.html - logging out only to bounce straight back into
-                # the hosted UI is not a logout.
+                callback_urls=all_redirect_uris,
+                # Sign-out always lands on the dashboard root, never on one of
+                # the inner pages - logging out only to bounce straight back
+                # into the hosted UI is not a logout.
                 logout_urls=[redirect_uri],
             ),
             id_token_validity=Duration.hours(1),
@@ -438,6 +450,17 @@ class MubwemStack(Stack):
             authorizer=dashboard_authorizer,
         )
 
+        # Authenticated: one site, with its full check series and incident
+        # history, for the monitor detail page.
+        http_api.add_routes(
+            path="/status/{siteId}",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=apigw_integrations.HttpLambdaIntegration(
+                "SiteDetailIntegration", api_fn
+            ),
+            authorizer=dashboard_authorizer,
+        )
+
         # Unauthenticated: only sites flagged isPublic. Same Lambda, which
         # branches on the request path - one function, one set of grants.
         http_api.add_routes(
@@ -445,6 +468,17 @@ class MubwemStack(Stack):
             methods=[apigwv2.HttpMethod.GET],
             integration=apigw_integrations.HttpLambdaIntegration(
                 "PublicStatusIntegration", api_fn
+            ),
+        )
+
+        # Unauthenticated detail. The Lambda answers 404 for a site that is
+        # not public and for a site that does not exist, with the same body
+        # either way, so this cannot be used to discover private site ids.
+        http_api.add_routes(
+            path="/public/status/{siteId}",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=apigw_integrations.HttpLambdaIntegration(
+                "PublicSiteDetailIntegration", api_fn
             ),
         )
 
@@ -552,10 +586,20 @@ class MubwemStack(Stack):
                 'window.MUBWEM_COGNITO_CLIENT_ID = "%s";'
                 % user_pool_client.user_pool_client_id,
                 'window.MUBWEM_REDIRECT_URI = "%s";' % redirect_uri,
-                'window.MUBWEM_ADMIN_REDIRECT_URI = "%s";' % admin_redirect_uri,
+                # Every registered callback, so auth.js can return the user to
+                # the page they signed in from instead of the dashboard root.
+                "window.MUBWEM_REDIRECT_URIS = %s;"
+                % json.dumps(all_redirect_uris),
                 # How often the checker actually runs, so the dashboard can
                 # draw a countdown ring towards the next check.
                 "window.MUBWEM_SCHEDULE_INTERVAL_SEC = %d;" % schedule_interval_sec,
+                # Read-only operational facts for the Settings page. These are
+                # already public in effect (the checker's behaviour is visible
+                # from the outside); nothing secret goes in this file.
+                "window.MUBWEM_FAILURE_THRESHOLD = %d;" % failure_threshold,
+                "window.MUBWEM_CHECK_TIMEOUT_SEC = %d;" % check_timeout_sec,
+                "window.MUBWEM_CHECKS_TTL_DAYS = %d;" % checks_ttl_days,
+                'window.MUBWEM_CHECK_REGION = "%s";' % Aws.REGION,
                 "",
             ]
         )
@@ -584,7 +628,8 @@ class MubwemStack(Stack):
             value=http_api.api_endpoint + "/admin",
             description="Base path for /admin/users and /admin/sites (JWT required)",
         )
-        CfnOutput(self, "AdminPanelUrl", value=admin_redirect_uri)
+        CfnOutput(self, "SitesAdminUrl", value=dashboard_url + "/sites.html")
+        CfnOutput(self, "TeamAdminUrl", value=dashboard_url + "/team.html")
         CfnOutput(self, "SitesTableName", value=sites_table.table_name)
         CfnOutput(self, "AlertTopicArn", value=alert_topic.topic_arn)
         CfnOutput(

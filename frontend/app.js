@@ -1,44 +1,27 @@
-/* MuBWeM dashboard — the authenticated view.
+/* MuBWeM dashboard — the authenticated monitor list.
  *
- * Signs in against the Cognito hosted UI (auth.js), then polls GET /status
- * with the id token as a bearer token. Rendering lives in dashboard.js, shared
- * with the public status page.
+ * Signs in against the Cognito hosted UI (auth.js via shell.js), then polls
+ * GET /status with the id token as a bearer token. Rendering lives in
+ * dashboard.js, shared with the public status page.
+ *
+ * Cards link through to monitor.html rather than carrying their own stats and
+ * incident list — that detail moved to the detail page.
  */
 (function () {
   "use strict";
 
   var API_URL = MubwemDashboard.resolveApiUrl("MUBWEM_API_URL", "mubwem.apiUrl");
 
-  var logoutLink = document.getElementById("logout");
-  var signedInAs = document.getElementById("signed-in-as");
-  var adminLink = document.getElementById("admin-link");
-
-  function showSignedIn() {
-    var email = MubwemAuth.claims().email;
-    if (signedInAs && email) signedInAs.textContent = email;
-    if (logoutLink) logoutLink.hidden = false;
-    // Offer the admin panel only to roles that can use it. This is a UI
-    // convenience, not a check - admin.js bounces a Viewer who navigates
-    // there anyway, and every /admin route enforces the group server-side.
-    if (adminLink && MubwemAuth.inAnyGroup(["Admins", "Editors"])) {
-      adminLink.hidden = false;
-    }
-  }
-
-  if (logoutLink) {
-    logoutLink.addEventListener("click", function (event) {
-      event.preventDefault();
-      MubwemAuth.logout();
-    });
-  }
-
   MubwemDashboard.setOverall("Signing in…", "unknown");
 
-  MubwemAuth.init()
-    .then(function () {
-      showSignedIn();
+  MubwemShell.boot({
+    page: "dashboard",
+    ready: function () {
       MubwemDashboard.start({
         apiUrl: API_URL,
+        detailHref: function (siteId) {
+          return "monitor.html?site=" + encodeURIComponent(siteId);
+        },
         headers: function () {
           var token = MubwemAuth.getIdToken();
           // null tells the poller to stop and call onUnauthorized instead of
@@ -53,9 +36,8 @@
           MubwemAuth.login();
         }
       });
-    })
-    .catch(function (err) {
-      MubwemDashboard.setOverall("Not signed in", "down");
-      MubwemDashboard.showError(err.message);
-    });
+    }
+  }).catch(function () {
+    /* shell.js has already put the message on the page. */
+  });
 })();

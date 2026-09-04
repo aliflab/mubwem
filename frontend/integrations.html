@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Integrations &amp; API</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%237c3aed'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <nav id="sidenav" class="sidenav" aria-label="Main"></nav>
+
+    <div class="shell-main">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div>
+            <h1>Integrations &amp; API</h1>
+            <p class="tagline">What this deployment exposes</p>
+          </div>
+          <div class="meta">
+            <div id="overall" class="overall">Informational</div>
+            <div class="session">
+              <span id="signed-in-as"></span>
+              <a href="#" id="logout" class="logout" hidden>Log out</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div id="error" class="error" hidden></div>
+        <div id="notice" class="notice" hidden></div>
+
+        <div class="stub-banner">
+          <strong>No external integrations (Slack, webhooks, etc.) exist yet.</strong>
+          Alerting is a single SNS topic with one email subscription, configured
+          at deploy time. There is nothing to connect or disconnect from here,
+          so this page documents the API instead of pretending to configure
+          anything.
+        </div>
+
+        <section class="panel">
+          <h2>Endpoints</h2>
+          <p class="panel-hint">
+            Read from the deploy-generated <code>config.js</code>.
+          </p>
+          <dl class="config-list" id="endpoint-list"></dl>
+        </section>
+
+        <section class="panel">
+          <h2>Try the public feed</h2>
+          <p class="panel-hint">
+            The public feed needs no credentials and returns only the sites
+            flagged public. The authenticated feed needs a Cognito id token in
+            an <code>Authorization: Bearer</code> header, which is why there is
+            no copy-and-run example for it.
+          </p>
+          <pre class="code-block" id="curl-example">—</pre>
+          <button type="button" id="copy-curl">Copy</button>
+        </section>
+
+        <section class="panel">
+          <h2>Not built yet</h2>
+          <p class="panel-hint">
+            Each of these needs backend work that does not exist, so none of it
+            is stubbed into the UI:
+          </p>
+          <ul class="todo-list">
+            <li>Outbound webhooks on incident open/close</li>
+            <li>Slack, Teams or PagerDuty notification targets</li>
+            <li>API keys for machine access (today the only credential is a user's Cognito token)</li>
+            <li>A published OpenAPI description of the status routes</li>
+          </ul>
+        </section>
+      </main>
+
+      <footer>
+        <span>Nothing on this page writes anything.</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="nav.js"></script>
+  <script src="shell.js"></script>
+  <script src="integrations.js"></script>
+</body>
+</html>

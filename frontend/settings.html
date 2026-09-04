@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Settings</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%239ca3af'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <nav id="sidenav" class="sidenav" aria-label="Main"></nav>
+
+    <div class="shell-main">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div>
+            <h1>Settings</h1>
+            <p class="tagline">Current operational configuration</p>
+          </div>
+          <div class="meta">
+            <div id="overall" class="overall">Read-only</div>
+            <div class="session">
+              <span id="signed-in-as"></span>
+              <a href="#" id="logout" class="logout" hidden>Log out</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div id="error" class="error" hidden></div>
+
+        <div class="stub-banner">
+          <strong>This page is read-only.</strong>
+          Additional settings are not yet configurable from this panel. The
+          values below are set at deploy time and shown here for reference —
+          change them with <code>cdk deploy -c key=value</code> or the
+          <code>MUBWEM_</code> environment variables described in the README.
+        </div>
+
+        <section class="panel">
+          <h2>Monitoring</h2>
+          <p class="panel-hint">
+            Read from the deploy-generated <code>config.js</code>. A dash means
+            the value was not published to the frontend.
+          </p>
+          <dl class="config-list" id="config-list"></dl>
+        </section>
+
+        <section class="panel">
+          <h2>Not built yet</h2>
+          <p class="panel-hint">
+            These would each need real backend support, so they are listed
+            rather than mocked up:
+          </p>
+          <ul class="todo-list">
+            <li>Per-user notification preferences (alerts go to one SNS email for the whole deployment)</li>
+            <li>Alert routing beyond email — Slack, SMS, PagerDuty</li>
+            <li>Maintenance windows that suppress alerting</li>
+            <li>Per-site alert thresholds (the failure threshold is deployment-wide)</li>
+          </ul>
+        </section>
+      </main>
+
+      <footer>
+        <span>Nothing on this page writes anything.</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="nav.js"></script>
+  <script src="shell.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

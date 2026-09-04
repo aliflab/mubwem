@@ -191,6 +191,17 @@
       return;
     }
 
+    // Mirrors the server's floor in lambda/admin/handler.py. The input's
+    // min="60" already blocks the spinner, but a typed value still reaches
+    // here, and a message beats a round trip that comes back 400.
+    if (body.checkIntervalSec < 60) {
+      MubwemShell.showError(
+        "Check interval must be at least 60 seconds — the scheduler cannot " +
+          "check more often than once a minute."
+      );
+      return;
+    }
+
     button.disabled = true;
     api("POST", "/sites", body)
       .then(function (payload) {

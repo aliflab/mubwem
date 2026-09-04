@@ -76,7 +76,11 @@
             <div class="field field-narrow">
               <label for="site-interval">Check interval (s)</label>
               <input id="site-interval" name="checkIntervalSec" type="number"
-                     min="30" max="86400" step="10" value="60">
+                     min="60" max="86400" step="10" value="60"
+                     aria-describedby="site-interval-help">
+              <small class="field-help" id="site-interval-help">
+                60s minimum — the scheduler cannot check more often.
+              </small>
             </div>
             <button type="submit" class="primary">Add site</button>
           </form>

@@ -226,7 +226,7 @@
     form.className = "form-grid";
     form.autocomplete = "off";
 
-    function field(label, name, type, value, extra) {
+    function field(label, name, type, value, extra, help) {
       var wrap = document.createElement("div");
       wrap.className = "field";
       var lab = document.createElement("label");
@@ -242,6 +242,14 @@
       });
       wrap.appendChild(lab);
       wrap.appendChild(input);
+      if (help) {
+        var note = document.createElement("small");
+        note.className = "field-help";
+        note.id = "edit-" + name + "-help";
+        note.textContent = help;
+        input.setAttribute("aria-describedby", note.id);
+        wrap.appendChild(note);
+      }
       form.appendChild(wrap);
       return input;
     }
@@ -249,11 +257,14 @@
     field("Name", "name", "text", site.name, { required: "required" });
     field("URL", "url", "url", site.url, { required: "required" });
     field("Brand", "brand", "text", site.brand || "");
-    field("Check interval (s)", "checkIntervalSec", "number", site.checkIntervalSec || 60, {
-      min: "30",
-      max: "86400",
-      step: "10"
-    });
+    field(
+      "Check interval (s)",
+      "checkIntervalSec",
+      "number",
+      site.checkIntervalSec || 60,
+      { min: "60", max: "86400", step: "10" },
+      "60s minimum — the scheduler cannot check more often."
+    );
 
     // One row for both switches. Giving each its own .field cell dropped them
     // into whatever grid tracks the text inputs left over, which is how
@@ -311,6 +322,17 @@
 
       if (body.url.indexOf("https://") !== 0) {
         MubwemShell.showError("URL must start with https://");
+        return;
+      }
+
+      // Mirrors the server's floor in lambda/admin/handler.py. A site already
+      // holding a sub-60 value will show it here, so this also catches an
+      // unchanged save of a legacy row and tells the user why.
+      if (body.checkIntervalSec < 60) {
+        MubwemShell.showError(
+          "Check interval must be at least 60 seconds — the scheduler " +
+            "cannot check more often than once a minute."
+        );
         return;
       }
 

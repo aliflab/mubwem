@@ -185,13 +185,20 @@ window.MubwemDashboard = (function () {
     return configured > 0 ? configured : 60;
   }
 
+  // EventBridge Scheduler cannot fire more often than once a minute, so a ring
+  // counting down from less than that would run two cycles per real check and
+  // look like it was working. This is a defensive floor for rows written
+  // before the write path enforced it, not the source of truth - the real fix
+  // is the value in DynamoDB, corrected through the edit form.
+  var MIN_INTERVAL_SEC = 60;
+
   /* A site's own configured interval, which every /status route now returns.
      The global cadence is the fallback for a site whose row predates the
      field - it should not happen, but a ring counting the wrong number is
      worse than a ring counting an approximate one. */
   function intervalFor(site) {
     var own = Number(site && site.checkIntervalSec);
-    return own > 0 ? own : scheduleIntervalSec();
+    return Math.max(own > 0 ? own : scheduleIntervalSec(), MIN_INTERVAL_SEC);
   }
 
   function svgNode(tag, attrs) {

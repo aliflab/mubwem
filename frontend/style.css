@@ -164,7 +164,11 @@ main {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  /* 250px, not 260px. At a 1440px viewport the grid gets
+     min(1440-216, 1440) - 40 padding - 240 rail - 20 gap = 924px, and three
+     columns need a base of at most (924 + 16) / 3 - 16 = 297px. 250 leaves
+     headroom and still yields four columns at 1920px (grid 1140px). */
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 16px;
   align-content: start;
 }
@@ -528,6 +532,13 @@ select.role-select {
 .field input { min-width: 190px; }
 .field-narrow input { min-width: 110px; }
 
+.field-help {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  max-width: 30ch;
+}
+
 button {
   font: inherit;
   font-size: 13px;
@@ -669,9 +680,10 @@ button.danger:hover:not(:disabled) {
 
 .nav-foot a { color: var(--muted); }
 
-/* The sidebar becomes a horizontal strip on narrow screens rather than
-   eating half the width. */
-@media (max-width: 720px) {
+/* The sidebar becomes a horizontal strip rather than eating the width. At
+   720px this left a 721-771px band where the 216px vertical nav squeezed the
+   grid under 536px and forced a single column on a tablet; 900px closes it. */
+@media (max-width: 900px) {
   .shell { flex-direction: column; }
   .sidenav {
     width: auto;
@@ -710,7 +722,7 @@ button.danger:hover:not(:disabled) {
    below it narrower than they needed to be. */
 .dash-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 240px;
   gap: 20px;
   align-items: start;
 }
@@ -727,10 +739,14 @@ button.danger:hover:not(:disabled) {
 
 .summary-card { margin-bottom: 0; }
 
-/* Below this the rail has nowhere to go. Stack it above the grid rather than
-   forcing a side-by-side that cannot hold a stat row; on the way down the two
-   cards sit beside each other until they cannot either. */
-@media (max-width: 1000px) {
+/* 1300px, not 1000px. This breakpoint is on the *viewport*, but the thing it
+   governs is the *content* width, which is 216px smaller because of the nav
+   rail. At 1000px the content column is only 744px, so keeping the summary
+   rail beside the grid left it 504px - a single card column, next to a
+   sidebar, which is what this fixes. Above 1300px the grid still clears three
+   columns (785px) with the rail in place; below it the rail stacks and the
+   grid gets the whole width. */
+@media (max-width: 1300px) {
   .dash-layout { grid-template-columns: minmax(0, 1fr); }
   .summary-side {
     order: -1;

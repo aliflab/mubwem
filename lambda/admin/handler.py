@@ -81,6 +81,15 @@ EDITABLE_SITE_FIELDS = (
 ROLE_TO_GROUP = {"Admin": "Admins", "Editor": "Editors", "Viewer": "Viewers"}
 GROUP_TO_ROLE = {group: role for role, group in ROLE_TO_GROUP.items()}
 
+# EventBridge Scheduler's floor is one minute, and the checker sweeps every
+# enabled site on every invocation - it does not compare checkIntervalSec
+# against anything. So a site set to 30s is not checked twice a minute; it is
+# checked once, and the dashboard's countdown ring just runs two cycles per
+# real check, which looks like it is working. Rejecting the value at the write
+# path is the only place this can be made honest.
+MIN_CHECK_INTERVAL_SEC = 60
+MAX_CHECK_INTERVAL_SEC = 86400
+
 # One page is plenty for a handful of internal users; the cap is here so a
 # surprising pool size cannot turn a list into an unbounded fan-out of
 # AdminListGroupsForUser calls.
@@ -270,8 +279,13 @@ def _clean_site_fields(payload, require_name_and_url):
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise Invalid("checkIntervalSec must be a number")
         interval = int(raw)
-        if not 30 <= interval <= 86400:
-            raise Invalid("checkIntervalSec must be between 30 and 86400")
+        if not MIN_CHECK_INTERVAL_SEC <= interval <= MAX_CHECK_INTERVAL_SEC:
+            raise Invalid(
+                "checkIntervalSec must be between %d and %d - checks run at "
+                "most once a minute, which is the shortest interval "
+                "EventBridge Scheduler supports"
+                % (MIN_CHECK_INTERVAL_SEC, MAX_CHECK_INTERVAL_SEC)
+            )
         fields["checkIntervalSec"] = interval
 
     for flag in ("enabled", "isPublic"):

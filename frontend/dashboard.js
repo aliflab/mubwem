@@ -16,6 +16,16 @@ window.MubwemDashboard = (function () {
   "use strict";
 
   var POLL_MS = 20000;
+  var RING_TICK_MS = 1000;
+
+  // Countdown ring geometry, in the SVG's own user units.
+  var RING_R = 18;
+  var RING_C = 2 * Math.PI * RING_R;
+
+  // The rings currently on the page. Rebuilt on every render, ticked by a
+  // single shared interval rather than one timer per card.
+  var rings = [];
+  var ringTimer = null;
 
   var el = {
     cards: document.getElementById("cards"),
@@ -72,6 +82,87 @@ window.MubwemDashboard = (function () {
     }
   }
 
+  // ------------------------------------------------------------ countdown ring
+  function scheduleIntervalSec() {
+    // Set by the deploy-generated config.js, derived from the same schedule
+    // expression that drives EventBridge Scheduler.
+    var configured = Number(window.MUBWEM_SCHEDULE_INTERVAL_SEC);
+    return configured > 0 ? configured : 60;
+  }
+
+  function svgNode(tag, attrs) {
+    var node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.keys(attrs).forEach(function (key) {
+      node.setAttribute(key, attrs[key]);
+    });
+    return node;
+  }
+
+  /* A ring counting down to this site's next check.
+
+     This is an approximation based on the last recorded check time plus the
+     configured schedule interval, not a live signal from EventBridge - the
+     browser has no way to know when the scheduler will actually fire. */
+  function renderRing(site) {
+    var wrap = text("div", "ring", null);
+    wrap.title = "Approximate time until the next check";
+
+    var svg = svgNode("svg", {
+      viewBox: "0 0 44 44",
+      width: "44",
+      height: "44",
+      class: "ring-svg",
+      "aria-hidden": "true"
+    });
+    svg.appendChild(
+      svgNode("circle", {
+        class: "ring-track",
+        cx: 22,
+        cy: 22,
+        r: RING_R,
+        fill: "none"
+      })
+    );
+    var progress = svgNode("circle", {
+      class: "ring-progress",
+      cx: 22,
+      cy: 22,
+      r: RING_R,
+      fill: "none",
+      "stroke-dasharray": RING_C,
+      "stroke-dashoffset": RING_C
+    });
+    svg.appendChild(progress);
+    wrap.appendChild(svg);
+
+    var label = text("span", "ring-label", "-");
+    wrap.appendChild(label);
+
+    rings.push({
+      checkedAt: site.lastCheckedAt ? Date.parse(site.lastCheckedAt) : NaN,
+      progress: progress,
+      label: label
+    });
+    return wrap;
+  }
+
+  function tickRings() {
+    var interval = scheduleIntervalSec();
+    rings.forEach(function (ring) {
+      if (isNaN(ring.checkedAt)) {
+        // Never checked: an empty ring rather than a fake countdown.
+        ring.progress.setAttribute("stroke-dashoffset", RING_C);
+        ring.label.textContent = "-";
+        return;
+      }
+      var elapsed = Math.max(0, (Date.now() - ring.checkedAt) / 1000);
+      var remaining = interval - (elapsed % interval);
+      var fraction = remaining / interval;
+      ring.progress.setAttribute("stroke-dashoffset", RING_C * (1 - fraction));
+      ring.label.textContent = Math.ceil(remaining) + "s";
+    });
+  }
+
   // --------------------------------------------------------------- rendering
   function renderIncidents(site) {
     var wrap = text("div", "incidents");
@@ -117,9 +208,13 @@ window.MubwemDashboard = (function () {
     names.appendChild(text("p", "brand-label", site.brand || ""));
     title.appendChild(names);
     head.appendChild(title);
-    head.appendChild(
+
+    var aside = text("div", "card-aside", null);
+    aside.appendChild(
       text("span", "badge badge-" + site.status, site.status.toUpperCase())
     );
+    aside.appendChild(renderRing(site));
+    head.appendChild(aside);
     card.appendChild(head);
 
     var link = document.createElement("a");
@@ -177,6 +272,9 @@ window.MubwemDashboard = (function () {
 
   function render(payload) {
     var sites = payload.sites || [];
+    // The old ring nodes are about to be thrown away with the cards; drop the
+    // references too, or the ticker keeps writing to detached elements.
+    rings = [];
     el.cards.innerHTML = "";
     sites.forEach(function (site) {
       el.cards.appendChild(renderCard(site));
@@ -184,6 +282,11 @@ window.MubwemDashboard = (function () {
     el.empty.hidden = sites.length > 0;
     el.updated.textContent = relativeTime(payload.generatedAt);
     renderOverall(sites);
+
+    // Once per second, independent of the 20s poll, so the countdown moves
+    // instead of jumping a third of a minute at a time.
+    tickRings();
+    if (!ringTimer) ringTimer = setInterval(tickRings, RING_TICK_MS);
   }
 
   function showError(message) {

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MuBWeM — Admin</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23f59e0b'/></svg>">
+</head>
+<body class="admin">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>MuBWeM Admin</h1>
+          <p class="tagline">Users and monitored sites</p>
+        </div>
+      </div>
+      <div class="meta">
+        <div id="overall" class="overall">Signing in…</div>
+        <div class="session">
+          <a href="index.html" class="nav-link">Dashboard</a>
+          <span id="signed-in-as"></span>
+          <a href="#" id="logout" class="logout" hidden>Log out</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="error" class="error" hidden></div>
+    <div id="notice" class="notice" hidden></div>
+
+    <!-- Sites: Admins and Editors. Delete buttons are rendered for Admins
+         only; the backend refuses an Editor's delete regardless. -->
+    <section id="sites-panel" class="panel" hidden>
+      <h2>Sites</h2>
+      <p class="panel-hint">
+        <strong>Enabled</strong> decides whether the checker sweeps a site at
+        all. <strong>Public</strong> puts it on the shareable status page, with
+        no login. Both save the moment you flip them.
+      </p>
+      <div class="table-scroll">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>URL</th>
+              <th>Brand</th>
+              <th>Interval</th>
+              <th>Enabled</th>
+              <th>Public</th>
+              <th class="cell-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="sites-rows"></tbody>
+        </table>
+      </div>
+      <p id="sites-loading" class="loading">Loading sites…</p>
+
+      <form id="site-form" class="form-row" autocomplete="off">
+        <div class="field">
+          <label for="site-name">Name</label>
+          <input id="site-name" name="name" type="text" required
+                 placeholder="Example Home">
+        </div>
+        <div class="field">
+          <label for="site-url">URL</label>
+          <input id="site-url" name="url" type="url" required
+                 placeholder="https://example.com">
+        </div>
+        <div class="field">
+          <label for="site-brand">Brand</label>
+          <input id="site-brand" name="brand" type="text"
+                 placeholder="Example Brand">
+        </div>
+        <div class="field field-narrow">
+          <label for="site-interval">Check interval (s)</label>
+          <input id="site-interval" name="checkIntervalSec" type="number"
+                 min="30" max="86400" step="10" value="60">
+        </div>
+        <button type="submit" class="primary">Add site</button>
+      </form>
+    </section>
+
+    <!-- Users: Admins only. Not rendered at all for Editors. -->
+    <section id="users-panel" class="panel" hidden>
+      <h2>Users</h2>
+      <p class="panel-hint">
+        A new user is emailed a temporary password by Cognito and sets a real
+        one on first login. Roles: <strong>Admin</strong> manages users and
+        sites, <strong>Editor</strong> creates and edits sites,
+        <strong>Viewer</strong> reads the dashboard.
+      </p>
+      <div class="table-scroll">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th class="cell-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="users-rows"></tbody>
+        </table>
+      </div>
+      <p id="users-loading" class="loading">Loading users…</p>
+
+      <form id="user-form" class="form-row" autocomplete="off">
+        <div class="field">
+          <label for="user-email">Email</label>
+          <input id="user-email" name="email" type="email" required
+                 placeholder="person@example.com">
+        </div>
+        <div class="field">
+          <label for="user-role">Role</label>
+          <select id="user-role" name="role">
+            <option value="Viewer">Viewer</option>
+            <option value="Editor">Editor</option>
+            <option value="Admin">Admin</option>
+          </select>
+        </div>
+        <button type="submit" class="primary">Add user</button>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <span>
+      Role checks shown here are for display only — every /admin route is
+      enforced server-side.
+    </span>
+  </footer>
+
+  <!-- Generated at deploy time by the CDK stack; sets the API URLs and the
+       Cognito domain, client id and redirect URIs. -->
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

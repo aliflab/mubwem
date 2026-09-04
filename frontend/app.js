@@ -11,11 +11,18 @@
 
   var logoutLink = document.getElementById("logout");
   var signedInAs = document.getElementById("signed-in-as");
+  var adminLink = document.getElementById("admin-link");
 
   function showSignedIn() {
     var email = MubwemAuth.claims().email;
     if (signedInAs && email) signedInAs.textContent = email;
     if (logoutLink) logoutLink.hidden = false;
+    // Offer the admin panel only to roles that can use it. This is a UI
+    // convenience, not a check - admin.js bounces a Viewer who navigates
+    // there anyway, and every /admin route enforces the group server-side.
+    if (adminLink && MubwemAuth.inAnyGroup(["Admins", "Editors"])) {
+      adminLink.hidden = false;
+    }
   }
 
   if (logoutLink) {

@@ -25,13 +25,27 @@ window.MubwemAuth = (function () {
   // cannot start with a valid token and arrive with a stale one.
   var EXPIRY_SKEW_MS = 60000;
 
+  /* Which registered callback URL this page uses. The admin panel is its own
+     page and its own callback, so signing in from /admin.html returns to
+     /admin.html rather than dumping the user on the dashboard. The value has
+     to match a callback URL in the app client character for character, which
+     is why it comes from the deploy-generated config rather than from
+     window.location. */
+  function redirectUri() {
+    var path = window.location.pathname || "";
+    if (/admin\.html$/.test(path) && window.MUBWEM_ADMIN_REDIRECT_URI) {
+      return window.MUBWEM_ADMIN_REDIRECT_URI;
+    }
+    return (
+      window.MUBWEM_REDIRECT_URI || window.location.origin + path
+    );
+  }
+
   function config() {
     return {
       domain: (window.MUBWEM_COGNITO_DOMAIN || "").replace(/\/+$/, ""),
       clientId: window.MUBWEM_COGNITO_CLIENT_ID || "",
-      redirectUri:
-        window.MUBWEM_REDIRECT_URI ||
-        window.location.origin + window.location.pathname
+      redirectUri: redirectUri()
     };
   }
 
@@ -165,7 +179,10 @@ window.MubwemAuth = (function () {
     }
     var params = new URLSearchParams({
       client_id: cfg.clientId,
-      logout_uri: cfg.redirectUri
+      // Always back to the dashboard root, never to /admin.html: landing on a
+      // page that immediately redirects to the hosted UI is not a logout.
+      logout_uri:
+        window.MUBWEM_REDIRECT_URI || window.location.origin + "/"
     });
     window.location.assign(cfg.domain + "/logout?" + params);
   }
@@ -266,12 +283,46 @@ window.MubwemAuth = (function () {
     });
   }
 
+  /* The caller's Cognito groups, read from the id token.
+
+     This is for deciding which controls to draw and nothing else. It is not a
+     security boundary: the token is in the browser, so anything here is under
+     the user's control. Every /admin/* route re-derives the same claim
+     server-side in lambda/admin/handler.py and enforces it there. Hiding a
+     button the backend would refuse anyway is a courtesy, not a check. */
+  function groups() {
+    var value = claims()["cognito:groups"];
+    if (Object.prototype.toString.call(value) === "[object Array]") {
+      return value.slice();
+    }
+    if (typeof value === "string" && value) {
+      return value
+        .replace(/^\[|\]$/g, "")
+        .split(",")
+        .map(function (g) {
+          return g.trim();
+        })
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  function inAnyGroup(names) {
+    var mine = groups();
+    for (var i = 0; i < names.length; i++) {
+      if (mine.indexOf(names[i]) !== -1) return true;
+    }
+    return false;
+  }
+
   return {
     init: init,
     login: login,
     logout: logout,
     getIdToken: getIdToken,
     claims: claims,
+    groups: groups,
+    inAnyGroup: inAnyGroup,
     clearSession: clearSession,
     isConfigured: isConfigured
   };

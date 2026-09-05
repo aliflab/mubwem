@@ -44,8 +44,8 @@
         <section class="panel form-panel" id="form-panel" hidden>
           <h2>Monitor details</h2>
           <p class="panel-hint">
-            The URL must be HTTPS. A new monitor is created paused and private,
-            so nothing is checked and nothing is published until you turn it on.
+            The URL must be HTTPS. A new monitor is created paused, so nothing
+            is checked until you turn it on.
           </p>
 
           <form id="add-form" autocomplete="off" class="form-grid">
@@ -58,16 +58,25 @@
 
             <div class="field">
               <label for="m-brand">Brand</label>
-              <input id="m-brand" name="brand" type="text"
+              <input id="m-brand" name="brand" type="text" list="brand-options"
                      placeholder="Example Brand" maxlength="120">
-              <small class="field-help">Groups the monitor into a filter chip. Optional.</small>
+              <datalist id="brand-options"></datalist>
+              <small class="field-help">
+                Groups the monitor into a filter chip. Optional — suggestions are
+                brands already in use, but any text is accepted.
+              </small>
             </div>
 
             <div class="field field-wide">
               <label for="m-url">URL</label>
-              <input id="m-url" name="url" type="url" required
-                     placeholder="https://example.com" aria-describedby="m-url-help">
+              <div class="input-with-action">
+                <input id="m-url" name="url" type="url" required
+                       placeholder="https://example.com" aria-describedby="m-url-help">
+                <button type="button" id="m-detect" class="secondary">Detect name</button>
+              </div>
               <small class="field-help" id="m-url-help">Must start with https://</small>
+              <small class="detect-status" id="m-detect-status" role="status"
+                     aria-live="polite" hidden></small>
             </div>
 
             <div class="field field-narrow">

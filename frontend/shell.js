@@ -134,6 +134,171 @@ window.MubwemShell = (function () {
     });
   }
 
+  // --------------------------------------------------- monitor form helpers
+  /* Shared by add-monitor.js and the edit form in monitor.js, so "Detect from
+     URL" and the brand suggestions behave identically in both places.
+
+     Both are conveniences and neither is ever load-bearing. Detection can
+     fail for a dozen ordinary reasons — the site is slow, it has no <title>,
+     it sits behind a WAF that dislikes robots — so nothing here disables an
+     input, blocks a submit, or overwrites something the user typed. The name
+     field stays a plain, always-editable text input whether detection runs,
+     fails, or is never invoked at all. */
+
+  /* Distinct brands across the sites list, sorted, blanks dropped. Real data
+     from the deployment, not a guessed vocabulary — the field stays free text
+     so a brand nobody has used yet can still be typed. */
+  function distinctBrands(sites) {
+    var seen = Object.create(null);
+    (sites || []).forEach(function (site) {
+      var brand = (site && site.brand ? String(site.brand) : "").trim();
+      if (brand && brand !== "Unassigned") seen[brand] = true;
+    });
+    return Object.keys(seen).sort(function (a, b) {
+      return a.toLowerCase().localeCompare(b.toLowerCase());
+    });
+  }
+
+  /* Points `input` at a <datalist> of the brands already in use. Native HTML
+     autocomplete: no dependency, no custom dropdown, and the field is still a
+     text input that accepts anything. A failed fetch leaves the field exactly
+     as it was — an empty datalist simply offers no suggestions. */
+  function attachBrandSuggestions(input, adminBase, listId) {
+    if (!input || !adminBase) return Promise.resolve([]);
+
+    var list = document.getElementById(listId);
+    if (!list) {
+      list = document.createElement("datalist");
+      list.id = listId;
+      document.body.appendChild(list);
+    }
+    input.setAttribute("list", listId);
+
+    return apiFetch(adminBase + "/sites")
+      .then(function (payload) {
+        var brands = distinctBrands(payload && payload.sites);
+        list.innerHTML = "";
+        brands.forEach(function (brand) {
+          var option = document.createElement("option");
+          option.value = brand;
+          list.appendChild(option);
+        });
+        return brands;
+      })
+      .catch(function () {
+        /* No suggestions, then. The field works the same way without them. */
+        return [];
+      });
+  }
+
+  /* Wires a "Detect from URL" button and a blur handler onto a URL field.
+     opts: { urlInput, nameInput, button, status, adminBase }
+
+     User-initiated only — a click, or the URL field losing focus after its
+     value changed. Never on keystroke: a request per character would hammer
+     the endpoint and fire against half-typed hostnames. */
+  function attachNameDetection(opts) {
+    var urlInput = opts.urlInput;
+    var nameInput = opts.nameInput;
+    var button = opts.button;
+    var status = opts.status;
+    var adminBase = opts.adminBase;
+    if (!urlInput || !nameInput || !adminBase) return;
+
+    var inFlight = false;
+    var lastTried = "";
+
+    function say(message, kind) {
+      if (!status) return;
+      status.textContent = message || "";
+      status.className = "detect-status" + (kind ? " detect-" + kind : "");
+      status.hidden = !message;
+    }
+
+    /* The name field already has text, so the suggestion is offered rather
+       than applied. Clicking accepts it; ignoring it costs nothing. */
+    function offer(suggestion) {
+      say("", null);
+      if (!status) return;
+      status.hidden = false;
+      status.className = "detect-status detect-offer";
+      status.appendChild(document.createTextNode("Use "));
+      var accept = document.createElement("button");
+      accept.type = "button";
+      accept.className = "link-button";
+      accept.textContent = "“" + suggestion + "”";
+      accept.addEventListener("click", function () {
+        nameInput.value = suggestion;
+        say("Name updated.", "ok");
+      });
+      status.appendChild(accept);
+      status.appendChild(document.createTextNode(" instead?"));
+    }
+
+    function detect() {
+      var url = (urlInput.value || "").trim();
+      if (inFlight) return;
+      if (url.indexOf("https://") !== 0) {
+        // Not a failure worth reporting: the field's own help text and the
+        // submit-time check already say the URL must be HTTPS.
+        say("", null);
+        return;
+      }
+
+      inFlight = true;
+      lastTried = url;
+      if (button) button.disabled = true;
+      say("Checking…", "busy");
+
+      apiFetch(adminBase + "/sites/preview", { method: "POST", body: { url: url } })
+        .then(function (payload) {
+          var suggestion = (payload && payload.suggestedName) || "";
+          if (!suggestion) {
+            say("Couldn’t detect a name automatically — enter one manually.", "warn");
+            return;
+          }
+          var current = (nameInput.value || "").trim();
+          if (!current) {
+            nameInput.value = suggestion;
+            say(
+              payload.detected
+                ? "Name filled in from the page."
+                : "No page title found — used the hostname.",
+              "ok"
+            );
+            return;
+          }
+          if (current === suggestion) {
+            say("Name already matches the page.", "ok");
+            return;
+          }
+          // Never silently overwrite what someone typed.
+          offer(suggestion);
+        })
+        .catch(function () {
+          say("Couldn’t detect a name automatically — enter one manually.", "warn");
+        })
+        .then(function () {
+          inFlight = false;
+          if (button) button.disabled = false;
+        });
+    }
+
+    if (button) button.addEventListener("click", detect);
+
+    urlInput.addEventListener("blur", function () {
+      var url = (urlInput.value || "").trim();
+      // Only once per distinct URL, and only when there is something to fill.
+      if (!url || url === lastTried) return;
+      if ((nameInput.value || "").trim()) return;
+      detect();
+    });
+
+    urlInput.addEventListener("input", function () {
+      if ((urlInput.value || "").trim() !== lastTried) say("", null);
+    });
+  }
+
   // ------------------------------------------------------------- formatting
   function relativeTime(iso) {
     if (!iso) return "never";
@@ -188,6 +353,9 @@ window.MubwemShell = (function () {
     relativeTime: relativeTime,
     durationLabel: durationLabel,
     text: text,
-    resolveApiUrl: resolveApiUrl
+    resolveApiUrl: resolveApiUrl,
+    distinctBrands: distinctBrands,
+    attachBrandSuggestions: attachBrandSuggestions,
+    attachNameDetection: attachNameDetection
   };
 })();

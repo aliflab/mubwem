@@ -537,6 +537,10 @@ class MubwemStack(Stack):
                 [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
             ),
             ("/admin/sites", [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST]),
+            # Static path, so it wins over /admin/sites/{siteId} - which in
+            # any case has no POST. No new IAM: this route only makes an
+            # outbound HTTPS call, and touches neither DynamoDB nor Cognito.
+            ("/admin/sites/preview", [apigwv2.HttpMethod.POST]),
             (
                 "/admin/sites/{siteId}",
                 [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],

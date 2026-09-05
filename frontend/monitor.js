@@ -4,6 +4,12 @@
  * metadata, the hourly buckets, a 24h response-time series and up to 50
  * incidents in one document.
  *
+ * The edit form carries the same two conveniences as the Add Monitor page,
+ * both implemented once in shell.js: "Detect name" reads a suggestion off the
+ * site's own page via POST /admin/sites/preview, and Brand autocompletes from
+ * brands already in use. Only the name comes from the page — "brand" is this
+ * app's internal grouping, which no website knows about.
+ *
  * The edit form is rendered only for Admins and Editors — the same rule the
  * site-management page uses, and the same caveat: it is presentation, not
  * access control. PATCH /admin/sites/{siteId} re-derives the caller's groups
@@ -232,7 +238,7 @@
     form.className = "form-grid";
     form.autocomplete = "off";
 
-    function field(label, name, type, value, extra, help) {
+    function field(label, name, type, value, extra, help, action) {
       var wrap = document.createElement("div");
       wrap.className = "field";
       var lab = document.createElement("label");
@@ -247,7 +253,17 @@
         input.setAttribute(key, extra[key]);
       });
       wrap.appendChild(lab);
-      wrap.appendChild(input);
+      if (action) {
+        // The input and its button share a row; the button is decoration on
+        // the field, not a second field.
+        var row = document.createElement("div");
+        row.className = "input-with-action";
+        row.appendChild(input);
+        row.appendChild(action);
+        wrap.appendChild(row);
+      } else {
+        wrap.appendChild(input);
+      }
       if (help) {
         var note = document.createElement("small");
         note.className = "field-help";
@@ -260,9 +276,41 @@
       return input;
     }
 
-    field("Name", "name", "text", site.name, { required: "required" });
-    field("URL", "url", "url", site.url, { required: "required" });
-    field("Brand", "brand", "text", site.brand || "");
+    var nameInput = field("Name", "name", "text", site.name, {
+      required: "required"
+    });
+
+    var detectButton = document.createElement("button");
+    detectButton.type = "button";
+    detectButton.className = "secondary";
+    detectButton.textContent = "Detect name";
+    var urlInput = field(
+      "URL",
+      "url",
+      "url",
+      site.url,
+      { required: "required" },
+      null,
+      detectButton
+    );
+
+    // Sits under the URL field, where the button that drives it is.
+    var detectStatus = document.createElement("small");
+    detectStatus.className = "detect-status";
+    detectStatus.id = "edit-detect-status";
+    detectStatus.setAttribute("role", "status");
+    detectStatus.setAttribute("aria-live", "polite");
+    detectStatus.hidden = true;
+    urlInput.parentNode.appendChild(detectStatus);
+
+    var brandInput = field(
+      "Brand",
+      "brand",
+      "text",
+      site.brand || "",
+      null,
+      "Suggestions are brands already in use; any text is accepted."
+    );
     field(
       "Check interval (s)",
       "checkIntervalSec",
@@ -319,6 +367,18 @@
       site.enabled
     );
     form.appendChild(checks);
+
+    // Both conveniences, wired from shell.js so this form and the Add Monitor
+    // page behave the same way. Neither blocks a save: if detection fails or
+    // the suggestions never arrive, every field is still typed by hand.
+    MubwemShell.attachNameDetection({
+      urlInput: urlInput,
+      nameInput: nameInput,
+      button: detectButton,
+      status: detectStatus,
+      adminBase: ADMIN_BASE
+    });
+    MubwemShell.attachBrandSuggestions(brandInput, ADMIN_BASE, "brand-options");
 
     var actions = document.createElement("div");
     actions.className = "form-actions";

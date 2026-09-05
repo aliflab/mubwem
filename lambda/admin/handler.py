@@ -1,7 +1,7 @@
 """MuBWeM admin API Lambda.
 
 Behind the same API Gateway HTTP API and the same Cognito JWT authorizer as
-GET /status, serving eight routes from one function:
+GET /status, serving nine routes from one function:
 
   GET    /admin/users             list users and their role
   POST   /admin/users             create a user in a role
@@ -12,6 +12,11 @@ GET /status, serving eight routes from one function:
   POST   /admin/sites             create a site
   PATCH  /admin/sites/{siteId}    edit an allow-listed set of site fields
   DELETE /admin/sites/{siteId}    delete a site row
+  POST   /admin/sites/preview     suggest a monitor name for a URL
+
+The last of those is the only route in this codebase that makes an outbound
+request to an address the caller chooses. It carries its own SSRF notice, in
+the "Site preview" section below; read that before touching it.
 
 AUTHORIZATION - read this before changing anything below.
 
@@ -42,14 +47,20 @@ draw, which is a convenience and not a security boundary. This file is the
 boundary.
 """
 
+import http.client
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import socket
+import ssl
 import string
+import time
 import urllib.parse
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 
 import boto3
 from botocore.config import Config
@@ -309,6 +320,415 @@ def _valid_email(email):
         return False
     email = email.strip()
     return bool(email) and "@" in email and " " not in email and len(email) <= 320
+
+
+# ---------------------------------------------------------------------------
+# Site preview: fetching an operator-supplied URL
+# ---------------------------------------------------------------------------
+# SSRF NOTICE - READ THIS BEFORE CHANGING ANYTHING IN THIS SECTION.
+#
+# Every other outbound call in this file goes to DynamoDB or Cognito, at an
+# address the AWS SDK chooses. This one goes wherever the request body says,
+# which makes it the only server-side request forgery surface in the codebase.
+# The caller is an authenticated Admin or Editor, so this is not anonymous
+# SSRF - but a stolen Editor token must not become a window into the VPC, the
+# instance metadata service, or anything else that trusts network position
+# instead of credentials.
+#
+# Each protection below answers one specific failure mode. Deleting any one of
+# them re-opens the mode named with it.
+#
+#   https:// only  ->  _preview_target()
+#       Stops file://, gopher://, ftp:// and the other schemes a general URL
+#       opener would happily dereference, and keeps the rule identical to the
+#       one _clean_site_fields() already applies to a site's url.
+#
+#   Resolve first, judge every answer  ->  _resolve_public_addrs()
+#       getaddrinfo() is called here, and EVERY address it returns is tested.
+#       Testing only the first would let a hostname publishing one public and
+#       one loopback A record through on a round robin. One bad address
+#       rejects the whole hostname.
+#
+#   Connect to the address that was judged  ->  _open_pinned_connection()
+#       The socket is opened against the exact IP that passed the check, while
+#       SNI and certificate verification stay bound to the hostname. Handing
+#       the hostname to a URL opener instead would let it resolve a second
+#       time and get a different answer - DNS rebinding, where a name is
+#       public at check time and 169.254.169.254 a millisecond later. This is
+#       the step naive implementations leave out, and without it the check
+#       above is decoration.
+#
+#   IPv4-mapped / 6to4 / Teredo unwrapping  ->  _blocked_ip()
+#       ::ffff:127.0.0.1 is loopback in an IPv6 costume. Unwrapping the
+#       embedded IPv4 keeps the range test correct regardless of the
+#       interpreter's patch level, rather than trusting IPv6Address.is_private
+#       to have been fixed in whatever runtime this lands on.
+#
+#   Per-socket timeout and a whole-request deadline  ->  PREVIEW_*_SEC
+#       A host that accepts a connection and then says nothing would otherwise
+#       hold a Lambda invocation open for its full 15s timeout. The deadline
+#       also bounds the redirect chain in wall-clock terms, not just in hops.
+#
+#   At most PREVIEW_MAX_REDIRECTS hops, each re-validated  ->  _fetch_page()
+#       A Location header is attacker-influenced input that has not been
+#       checked yet. Start at a public URL, redirect to an internal one is the
+#       standard bypass, so every hop re-enters the same scheme and address
+#       checks as the original URL. No hop is trusted for having come from a
+#       host that passed.
+#
+#   Hard read cap  ->  PREVIEW_MAX_BYTES
+#       Enforced while reading from the socket, so a lying or absent
+#       Content-Length changes nothing, and Accept-Encoding: identity keeps
+#       the cap measured in the same bytes the sender spent. A <title> that
+#       has not shown up in 64KB is not worth the memory.
+#
+#   Text extraction only  ->  _MetadataExtractor
+#       html.parser from the standard library, reading two tags. Nothing
+#       fetched is executed, evaluated, deserialised, or written anywhere.
+#
+#   One failure answer  ->  _handle_preview_site()
+#       Blocked, refused, timed out, 404 and no-title-present all produce the
+#       same hostname fallback in the same body shape. Distinguishing them
+#       would turn this endpoint into an oracle for what exists on the inside.
+#
+# Accepted residual risk: an authenticated Editor can aim this at any *public*
+# address and time the answer, which is a slow and noisy port scanner. The
+# reserved-range check is what keeps that pointed away from anything private.
+# Rate limiting is not built.
+
+# Per socket operation. Deliberately shorter than the deadline: a stalled read
+# should fail on its own rather than burning the whole budget.
+PREVIEW_SOCKET_TIMEOUT_SEC = 3.0
+# Whole request, redirects included. Well inside AdminFunction's 15s timeout,
+# so this endpoint fails on its own terms rather than being killed.
+PREVIEW_TOTAL_DEADLINE_SEC = 8.0
+PREVIEW_MAX_REDIRECTS = 2
+PREVIEW_MAX_BYTES = 64 * 1024
+PREVIEW_USER_AGENT = "MuBWeM-SitePreview/1.0"
+PREVIEW_HTML_TYPES = ("text/html", "application/xhtml+xml")
+
+# Built once: loads the trust store at import, not per request. The default
+# context verifies the chain and checks the hostname, both of which stay on.
+_PREVIEW_SSL_CONTEXT = ssl.create_default_context()
+
+
+class PreviewUnavailable(Exception):
+    """Detection did not work. Logged, never returned verbatim to the caller."""
+
+
+def _embedded_addresses(ip):
+    """`ip`, plus any IPv4 address an IPv6 form carries inside it."""
+    yield ip
+    if not isinstance(ip, ipaddress.IPv6Address):
+        return
+    if ip.ipv4_mapped:
+        yield ip.ipv4_mapped
+    if ip.sixtofour:
+        yield ip.sixtofour
+    if ip.teredo:
+        # (server, client). A Teredo server inside the network is as much a
+        # target as the client, so both halves are tested.
+        for part in ip.teredo:
+            yield part
+
+
+def _blocked_ip(raw):
+    """True if `raw` is anything but an ordinary public internet address.
+
+    Fails closed: an address that cannot be parsed is not provably public, so
+    it is blocked. is_global is tested last as a backstop - it also covers the
+    carrier-grade NAT and documentation ranges the named predicates miss.
+    """
+    try:
+        parsed = ipaddress.ip_address(raw)
+    except ValueError:
+        return True
+
+    for ip in _embedded_addresses(parsed):
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+            or not ip.is_global
+        ):
+            return True
+    return False
+
+
+def _resolve_public_addrs(hostname, port):
+    """Every address `hostname` resolves to - or raise if ANY is off-limits."""
+    try:
+        infos = socket.getaddrinfo(
+            hostname, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+        )
+    except socket.gaierror as exc:
+        raise PreviewUnavailable("dns lookup failed: %s" % exc)
+
+    if not infos:
+        raise PreviewUnavailable("dns returned no addresses")
+
+    resolved = []
+    for family, _socktype, _proto, _canonname, sockaddr in infos:
+        address = sockaddr[0]
+        if _blocked_ip(address):
+            # One bad answer condemns the hostname. A record set mixing a
+            # public and a loopback address must not work half the time.
+            raise PreviewUnavailable("blocked address %s for %s" % (address, hostname))
+        resolved.append((family, sockaddr))
+    return resolved
+
+
+def _preview_target(url):
+    """(hostname, port, request_path) for a URL this endpoint will fetch."""
+    parsed = urllib.parse.urlsplit(url)
+
+    if parsed.scheme != "https":
+        raise PreviewUnavailable("scheme %r is not https" % parsed.scheme)
+    if parsed.username or parsed.password:
+        # https://real-host@evil/ reads as one host and connects to another.
+        raise PreviewUnavailable("credentials in url")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise PreviewUnavailable("no hostname in url")
+
+    try:
+        port = parsed.port or 443
+    except ValueError:
+        raise PreviewUnavailable("unparseable port")
+    if not 1 <= port <= 65535:
+        raise PreviewUnavailable("port out of range")
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path = path + "?" + parsed.query
+    return hostname, port, path
+
+
+def _open_pinned_connection(hostname, port, deadline):
+    """HTTPS connection to a vetted address, still verified against `hostname`.
+
+    The TCP connection is pinned to an IP that passed _blocked_ip(); TLS is
+    negotiated with server_hostname set to the name, so certificate checking
+    is unaffected. Both halves are required - see the notice above.
+    """
+    last_error = None
+    for family, sockaddr in _resolve_public_addrs(hostname, port):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PreviewUnavailable("deadline reached before connect")
+
+        timeout = min(PREVIEW_SOCKET_TIMEOUT_SEC, remaining)
+        sock = None
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(sockaddr)
+            tls = _PREVIEW_SSL_CONTEXT.wrap_socket(sock, server_hostname=hostname)
+        except (OSError, ValueError) as exc:
+            if sock is not None:
+                sock.close()
+            last_error = exc
+            continue
+
+        conn = http.client.HTTPSConnection(hostname, port, timeout=timeout)
+        # Pre-connected. request() only calls connect() when sock is None, so
+        # the vetted socket is the one that gets used - there is no second
+        # name resolution anywhere in this path.
+        conn.sock = tls
+        return conn
+
+    raise PreviewUnavailable("connect failed: %s" % (last_error,))
+
+
+def _charset_of(content_type):
+    """The charset from a Content-Type header, or utf-8 if it is unusable."""
+    for part in content_type.split(";")[1:]:
+        key, _, value = part.strip().partition("=")
+        if key.strip().lower() == "charset":
+            candidate = value.strip().strip("\"'")
+            try:
+                "".encode(candidate)
+                return candidate
+            except (LookupError, TypeError, ValueError):
+                break
+    return "utf-8"
+
+
+def _fetch_page(url, deadline):
+    """Decoded HTML for `url`, following at most PREVIEW_MAX_REDIRECTS hops."""
+    current = url
+
+    for hop in range(PREVIEW_MAX_REDIRECTS + 1):
+        if time.monotonic() >= deadline:
+            raise PreviewUnavailable("deadline reached")
+
+        # Re-entered on every hop, so a redirect target gets the same scheme
+        # and address checks the original URL got.
+        hostname, port, path = _preview_target(current)
+        conn = _open_pinned_connection(hostname, port, deadline)
+        try:
+            conn.request(
+                "GET",
+                path,
+                headers={
+                    "Host": hostname if port == 443 else "%s:%d" % (hostname, port),
+                    "User-Agent": PREVIEW_USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml",
+                    # No compression: the byte cap below should measure the
+                    # same bytes the sender spent, not a decompressed bomb.
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                },
+            )
+            response = conn.getresponse()
+
+            if response.status in (301, 302, 303, 307, 308):
+                if hop >= PREVIEW_MAX_REDIRECTS:
+                    raise PreviewUnavailable("too many redirects")
+                location = response.getheader("Location")
+                if not location:
+                    raise PreviewUnavailable("redirect carried no Location")
+                current = urllib.parse.urljoin(current, location)
+                continue
+
+            if not 200 <= response.status < 300:
+                raise PreviewUnavailable("http %d" % response.status)
+
+            content_type = (response.getheader("Content-Type") or "").lower()
+            mime = content_type.split(";", 1)[0].strip()
+            if mime and mime not in PREVIEW_HTML_TYPES:
+                raise PreviewUnavailable("content-type %s" % mime)
+
+            # read(n) takes at most n bytes off the socket. Content-Length is
+            # never consulted, so a header claiming otherwise buys nothing.
+            body = response.read(PREVIEW_MAX_BYTES)
+        finally:
+            conn.close()
+
+        return body.decode(_charset_of(content_type), errors="replace")
+
+    raise PreviewUnavailable("too many redirects")
+
+
+class _MetadataExtractor(HTMLParser):
+    """Pulls <title> and og:site_name out of HTML. Reads only; runs nothing."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title = None
+        self.site_name = None
+        self._in_title = False
+        self._title_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title":
+            if self.title is None and not self._title_parts:
+                self._in_title = True
+            return
+        if tag != "meta" or self.site_name is not None:
+            return
+
+        pairs = {key.lower(): (value or "") for key, value in attrs if key}
+        label = (pairs.get("property") or pairs.get("name") or "").strip().lower()
+        if label == "og:site_name":
+            content = pairs.get("content", "").strip()
+            if content:
+                self.site_name = content
+
+    def handle_endtag(self, tag):
+        if tag == "title" and self._in_title:
+            self._in_title = False
+            self.title = "".join(self._title_parts)
+
+    def handle_data(self, data):
+        # The bound is on fragment count, not characters: a <title> split into
+        # thousands of pieces is markup abuse, not a title.
+        if self._in_title and len(self._title_parts) < 64:
+            self._title_parts.append(data)
+
+    def best_name(self):
+        """og:site_name wins - a title often carries a suffix like " | Home"."""
+        if self.title is None and self._title_parts:
+            # Body hit the byte cap mid-title; use what did arrive.
+            self.title = "".join(self._title_parts)
+        return self.site_name or self.title
+
+
+def _suggested_name(page_html):
+    parser = _MetadataExtractor()
+    try:
+        parser.feed(page_html)
+    except Exception:  # noqa: BLE001 - broken markup is a fallback, not a 500
+        pass
+    return parser.best_name()
+
+
+def _tidy_name(value):
+    if not value:
+        return None
+    # Collapse the newlines and indentation pretty-printed markup leaves
+    # inside a title. 200 matches the cap _clean_site_fields puts on name.
+    collapsed = " ".join(str(value).split())[:200]
+    return collapsed or None
+
+
+def _name_from_hostname(hostname):
+    """The always-available fallback: the hostname, minus a leading www."""
+    return hostname[4:] if hostname.startswith("www.") else hostname
+
+
+def _handle_preview_site(event):
+    """POST /admin/sites/preview - suggest a monitor name for a URL.
+
+    Always answers 200 with a usable suggestion. A blocked address, a refused
+    connection, a timeout, a 500 from the target and a page with no title all
+    produce the same hostname fallback and the same body: the form has to stay
+    usable either way, and the caller must not learn which one happened.
+
+    Read the SSRF notice at the top of this section before changing anything
+    here or in the functions it calls.
+    """
+    denied = _require(event, CAN_WRITE_SITES)
+    if denied:
+        return denied
+
+    payload = _body(event)
+    url = payload.get("url")
+    if not isinstance(url, str) or not url.strip().startswith("https://"):
+        raise Invalid("url is required and must start with https://")
+    url = url.strip()[:2000]
+
+    # A malformed URL is a 400 about the caller's own input, so it says why.
+    # Everything past this point is about the network and says nothing.
+    try:
+        hostname, _port, _path = _preview_target(url)
+    except PreviewUnavailable as exc:
+        raise Invalid("url is not a fetchable https address: %s" % exc)
+
+    deadline = time.monotonic() + PREVIEW_TOTAL_DEADLINE_SEC
+    suggested = None
+    try:
+        suggested = _tidy_name(_suggested_name(_fetch_page(url, deadline)))
+    except PreviewUnavailable as exc:
+        # CloudWatch gets the reason; the response does not.
+        logger.info("Preview fell back for %s: %s", hostname, exc)
+    except Exception:  # noqa: BLE001 - a convenience must not 500 the form
+        logger.exception("Preview failed unexpectedly for %s", hostname)
+
+    return _response(
+        200,
+        {
+            "suggestedName": suggested or _name_from_hostname(hostname),
+            "hostname": hostname,
+            # Whether the name came off the page or off the hostname. Says
+            # nothing about *why* a fetch failed - see "One failure answer".
+            "detected": bool(suggested),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +1159,7 @@ ROUTES = {
     "POST /admin/sites": _handle_create_site,
     "PATCH /admin/sites/{siteId}": _handle_update_site,
     "DELETE /admin/sites/{siteId}": _handle_delete_site,
+    "POST /admin/sites/preview": _handle_preview_site,
 }
 
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy this file to config/config.json (gitignored) and replace the placeholders with your real test sites, then run: python scripts/seed_sites.py. Each entry becomes one item in the Sites DynamoDB table. checkIntervalSec is recorded per site for future use; Phase 1 sweeps every enabled site once a minute regardless. isPublic defaults to false: only sites set to true appear on the unauthenticated public status page (public.html), everything else needs a dashboard login.",
+  "_comment": "Copy this file to config/config.json (gitignored) and replace the placeholders with your real test sites, then run: python scripts/seed_sites.py. Each entry becomes one item in the Sites DynamoDB table. checkIntervalSec is recorded per site for future use; Phase 1 sweeps every enabled site once a minute regardless. Every site needs a dashboard login to view - there is no public status page.",
   "sites": [
     {
       "siteId": "example-home",
@@ -7,8 +7,7 @@
       "url": "https://example.com",
       "brand": "Example Brand",
       "checkIntervalSec": 60,
-      "enabled": true,
-      "isPublic": false
+      "enabled": true
     },
     {
       "siteId": "example-shop",
@@ -16,8 +15,7 @@
       "url": "https://example.org",
       "brand": "Example Brand",
       "checkIntervalSec": 60,
-      "enabled": true,
-      "isPublic": false
+      "enabled": true
     },
     {
       "siteId": "example-staging",
@@ -25,17 +23,15 @@
       "url": "https://staging.example.net",
       "brand": "Second Brand",
       "checkIntervalSec": 60,
-      "enabled": false,
-      "isPublic": false
+      "enabled": false
     },
     {
-      "siteId": "example-public-status",
-      "name": "Example Public Site",
-      "url": "https://public.example.com",
+      "siteId": "example-archive",
+      "name": "Example Archive",
+      "url": "https://archive.example.com",
       "brand": "Second Brand",
       "checkIntervalSec": 60,
-      "enabled": true,
-      "isPublic": true
+      "enabled": true
     }
   ]
 }

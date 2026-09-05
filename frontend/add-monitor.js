@@ -73,8 +73,7 @@
       name: form.elements.name.value.trim(),
       url: form.elements.url.value.trim(),
       checkIntervalSec: Number(form.elements.checkIntervalSec.value) || MIN_INTERVAL_SEC,
-      enabled: form.elements.enabled.checked,
-      isPublic: form.elements.isPublic.checked
+      enabled: form.elements.enabled.checked
     };
     var brand = form.elements.brand.value.trim();
     if (brand) body.brand = brand;
@@ -134,18 +133,11 @@
         : "Signed in as Editor";
       el.overall.className = "overall overall-up";
 
-      // Both default to off. Turning a monitor on, and putting it on the
-      // public page, are separate deliberate acts.
+      // Defaults to off. Turning a new monitor on is a deliberate act.
       toggleField(
         "Enabled",
         "Start checking this monitor every minute right away.",
         "enabled",
-        false
-      );
-      toggleField(
-        "Public status page",
-        "Show it on public.html, which needs no sign-in.",
-        "isPublic",
         false
       );
 

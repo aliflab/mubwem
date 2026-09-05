@@ -4,7 +4,7 @@
 
 An UptimeRobot-style uptime monitor built on AWS with CDK (Python). It checks a list of sites every minute, records every check, opens and closes incidents, emails you when something goes down or recovers, and serves a static status dashboard from CloudFront.
 
-The dashboard is behind a Cognito login. Individual sites can be flagged `isPublic` to also appear on a shareable status page that needs no login — the UptimeRobot public-status-page idea, opt-in per site.
+The dashboard is behind a Cognito login. Every route in the system requires a valid token — there is no public or unauthenticated access anywhere.
 
 Access is role based: **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI. See [Roles and access control](#roles-and-access-control).
 
@@ -21,8 +21,7 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 > **TODO — the diagram is further out of date than it was.** It still shows
 > the pre-authentication topology: the warning markers on the CloudFront and
 > `/status` edges, and no Cognito at all. It needs a user pool feeding a JWT
-> authorizer in front of `GET /status`, and the second unauthenticated
-> `GET /public/status` edge.
+> authorizer in front of every route.
 >
 > Role-based access has since added more that is missing entirely: three
 > Cognito **user pool groups** (Admins / Editors / Viewers), a second
@@ -30,11 +29,10 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 > behind the same JWT authorizer, and that Lambda's two arrows — one to the
 > Sites table, one to the Cognito user pool.
 >
-> The dashboard overhaul added more again: two further status routes
-> (`GET /status/{siteId}` behind the authorizer, `GET /public/status/{siteId}`
-> open), and seven pages hanging off CloudFront rather than three — dashboard,
-> monitor detail, incidents, monitors, team members, settings, integrations,
-> plus the public page.
+> The dashboard overhaul added more again: a second status route
+> (`GET /status/{siteId}`, also behind the authorizer), and seven pages
+> hanging off CloudFront rather than three — dashboard, monitor detail,
+> incidents, monitors, team members, settings, integrations.
 >
 > Edit `docs/mubwem.drawio` and re-export `docs/mubwem.drawio.svg` over the top.
 
@@ -42,11 +40,9 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 
 All four are **on-demand (PAY_PER_REQUEST)**.
 
-`isPublic` is an application-level field, not a DynamoDB constraint — the table is schemaless past its keys. It defaults to `false`, and only `true` puts a site on the unauthenticated public page.
-
 | Table | Keys | What it holds |
 |---|---|---|
-| **Sites** | PK `siteId` | `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `isPublic`, `createdAt` — the monitoring list, managed from the admin panel or seeded from `config/config.json` |
+| **Sites** | PK `siteId` | `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list, managed from the admin panel or seeded from `config/config.json` |
 | **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — the raw history, auto-expired after 30 days by DynamoDB TTL |
 | **CurrentStatus** | PK `siteId` | `currentStatus` (`up`/`down`), `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` — the one row the dashboard reads per site |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
@@ -75,10 +71,8 @@ Requiring three consecutive failures is what keeps a single flaky check from pag
 |---|---|---|---|
 | `GET /status` | Cognito JWT (API Gateway authorizer) | all of them | `index.html` |
 | `GET /status/{siteId}` | Cognito JWT | one, with full detail | `monitor.html` |
-| `GET /public/status` | none | only `isPublic: true` | `public.html` |
-| `GET /public/status/{siteId}` | none | one, only if `isPublic` | — |
 
-The list routes carry a top-level `summary` object (up/down/paused counts, weighted 24h uptime, MTBF, time since the last incident, incidents in the last 24h) and a 24-slot `hourlyBuckets` array per site. Both are computed from data the response was already assembling — the buckets come out of the same 24h `UptimeChecks` query the uptime percentage uses, so adding them cost no extra reads.
+The list route carries a top-level `summary` object (up/down/paused counts, weighted 24h uptime, MTBF, time since the last incident, incidents in the last 24h) and a 24-slot `hourlyBuckets` array per site. Both are computed from data the response was already assembling — the buckets come out of the same 24h `UptimeChecks` query the uptime percentage uses, so adding them cost no extra reads.
 
 Each bucket is one of four states, and the distinction between the first two is the point:
 
@@ -93,9 +87,7 @@ Colouring *any* failure red made red mean "a blip happened", which is not what t
 
 This is display only. `uptime24h` is still the plain share of individual checks that succeeded; an amber hour lowers it exactly as much as it always did.
 
-The detail routes add the raw 24h check series for the response-time graph, thinned by regular-interval sampling to at most 500 points (never truncated — truncation would quietly turn a 24-hour graph into an 8-hour one), plus up to 50 incidents instead of the list view's 5.
-
-On the public detail route, a site that is private and a site that does not exist return **the same 404 with the same body**, so it cannot be used to discover which site ids exist.
+The detail route adds the raw 24h check series for the response-time graph, thinned by regular-interval sampling to at most 500 points (never truncated — truncation would quietly turn a 24-hour graph into an 8-hour one), plus up to 50 incidents instead of the list view's 5.
 
 A site with `enabled: false` now reports `status: "paused"` rather than whatever `CurrentStatus` last recorded. Previously a paused site kept showing its last known status and was counted as operational in the header — that miscount is what `pausedCount` and the `paused` status fix.
 
@@ -104,17 +96,15 @@ A site with `enabled: false` now reports `status: "paused"` rather than whatever
 | Route | Minimum role | What it does |
 |---|---|---|
 | `GET /admin/sites` | Editor | every site, admin view |
-| `POST /admin/sites` | Editor | create a site (starts disabled and private) |
-| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `isPublic` |
+| `POST /admin/sites` | Editor | create a site (starts disabled) |
+| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `brand`, `checkIntervalSec`, `enabled` |
 | `DELETE /admin/sites/{siteId}` | **Admin** | delete the Sites row |
 | `GET /admin/users` | **Admin** | list users and their role |
 | `POST /admin/users` | **Admin** | create a user in a role |
 | `PATCH /admin/users/{username}` | **Admin** | change a user's role, enable/disable them |
 | `DELETE /admin/users/{username}` | **Admin** | delete a user |
 
-Two functions rather than more routes on one: the status API is reachable anonymously on `/public/status`, and giving that same function the ability to administer the user pool would be handing a capability to the one Lambda anyone can reach without a token. `AdminFunction` gets its own IAM role, read/write on **Sites only** — not UptimeChecks, CurrentStatus or Incidents — plus eight `cognito-idp` actions scoped to this user pool's ARN.
-
-Both responses have the same shape, so one renderer (`frontend/dashboard.js`) serves both pages; `public.html` is styled distinctly so it is obvious which view you are looking at. The filter runs before any per-site work, so a site the caller will not see costs no `UptimeChecks` or `Incidents` read. `isPublic` itself is never echoed back on either route.
+Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` gets its own IAM role, read/write on **Sites only** — not UptimeChecks, CurrentStatus or Incidents — plus eight `cognito-idp` actions scoped to this user pool's ARN.
 
 ### Look and feel
 
@@ -135,12 +125,11 @@ A persistent side navigation (`nav.js`) is shared by every authenticated page. *
 | `index.html` | any signed-in user | A toolbar (search, status, brand, density) over two summary cards and a grid of monitor cards. Each card carries the status badge, the countdown ring, a 24-bar hourly history and the 24h uptime percentage, and links through to the detail page. |
 | `monitor.html?site=<siteId>` | any signed-in user | One monitor: the large hourly bar, the four detail stats that used to sit on the card, a Chart.js response-time graph over the last 24h, and up to 50 incidents. Admins and Editors additionally get an **Edit** form that `PATCH`es `/admin/sites/{siteId}`; a Viewer sees no edit control at all, not a disabled one. |
 | `incidents.html` | any signed-in user | Flat cross-site incident list, newest first, with a client-side filter by monitor. |
-| `sites.html` | Admins, Editors | Monitor management: the enable/public toggles and (Admins only) delete. Links to the create form. |
-| `add-monitor.html` | Admins, Editors | Full-page create form (name, brand, URL, interval, Enabled and Public switches). Posts to the existing `POST /admin/sites`. |
+| `sites.html` | Admins, Editors | Monitor management: the enable toggle and (Admins only) delete. Links to the create form. |
+| `add-monitor.html` | Admins, Editors | Full-page create form (name, brand, URL, interval, Enabled switch). Posts to the existing `POST /admin/sites`. |
 | `team.html` | Admins | User management. An Editor reaching it is told why there is nothing to see. |
 | `settings.html` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
-| `integrations.html` | any signed-in user | **Stub.** The API URLs and a `curl` example. No integrations exist. |
-| `public.html` | nobody signs in | The shareable status page. Same toolbar and summary as the dashboard, and it keeps the stats and incident list on the card, since it has no detail page to link to. |
+| `integrations.html` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
 
 #### Dashboard controls
 
@@ -184,7 +173,7 @@ The id token is kept in `sessionStorage`, never `localStorage`, and no refresh t
 - **On-demand DynamoDB billing.** At a handful of sites and one check per minute, the write volume is trivial and on-demand costs cents. Provisioned capacity would be marginally cheaper at steady state but adds capacity planning and autoscaling config for no real benefit at this scale.
 - **A DynamoDB `Scan` on the Sites table each run.** Correct at tens of rows, where every row is needed anyway. At thousands of sites this becomes the first thing to fix — a GSI on `enabled`, or sharded scheduling.
 - **Uptime % is computed on read** from up to 24 hours of check rows. Simple and always accurate, but the API's cost grows with the retention window; a rollup table would be the next step.
-- **Public exposure is opt-in per site, not per deployment.** The dashboard and `GET /status` both require a Cognito login; `GET /public/status` and `public.html` are deliberately open, and show only sites flagged `isPublic`. See [Access control](#access-control-authenticated-dashboard-opt-in-public-page) for what that does and does not protect.
+- **Everything is behind the login, with no public view.** There is no unauthenticated route and no shareable status page; a site's status is visible only to a signed-in user. See [Access control](#access-control-fully-authenticated) for what that does and does not protect.
 - **Deleting a site does not delete its history.** `DELETE /admin/sites/{siteId}` removes the Sites row only; UptimeChecks and Incidents rows for that site are left orphaned. They are harmless, checks age out on their own TTL, and cascading a delete across two partition keys is more machinery than this feature earns.
 - **`removalPolicy: DESTROY`** on the tables, the bucket and the Cognito user pool. This is a test build meant to be torn down cleanly, dashboard accounts included. Anything real should use `RETAIN`.
 
@@ -197,7 +186,7 @@ Three Cognito **user pool groups**, created by the stack. A user's group arrives
 | Role | Sites | Users | Dashboard |
 |---|---|---|---|
 | **Admins** | create, edit, **delete** | create, change role, enable/disable, delete | yes |
-| **Editors** | create, edit (`name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `isPublic`) — **no delete** | no access | yes |
+| **Editors** | create, edit (`name`, `url`, `brand`, `checkIntervalSec`, `enabled`) — **no delete** | no access | yes |
 | **Viewers** | no access | no access | yes, read-only |
 
 A Viewer has no access to any `/admin/*` route at all, not even a read-only one. An Editor who needs a site to stop being checked turns its `enabled` toggle off rather than deleting it — deletion has a larger blast radius, so it stays with Admins.
@@ -234,13 +223,13 @@ If you ever delete every Admin, you are back to this step. That is why an admin 
 
 ---
 
-## Access control: authenticated dashboard, opt-in public page
+## Access control: fully authenticated
 
 This started as a known Phase 1 gap — the dashboard URL and `/status` were both reachable by anyone holding the URL, with no authentication — identified during Phase 1 testing rather than discovered later. It is now closed as follows.
 
-**The dashboard is login-gated by default.** A Cognito user pool with **self-signup disabled** fronts it: accounts exist only because an operator created them (see [Creating a user](#creating-a-user)). Login goes through the Cognito hosted UI, and `GET /status` sits behind an API Gateway JWT authorizer validating the id token against that pool and app client. There is no way to reach a private site's status without a token.
+**The dashboard is login-gated.** A Cognito user pool with **self-signup disabled** fronts it: accounts exist only because an operator created them (see [Creating a user](#creating-a-user)). Login goes through the Cognito hosted UI, and every route sits behind an API Gateway JWT authorizer validating the id token against that pool and app client.
 
-**Public sharing is an explicit per-site opt-in.** A site with `isPublic: true` also appears on `GET /public/status`, which has no authorizer, and on `public.html`, which is the URL to hand out. Everything else stays behind the login. The default is `false`, so a site is private unless someone says otherwise.
+**There is no public or unauthenticated access anywhere in the system.** Every route on the HTTP API — both `/status` routes and all eight `/admin/*` routes — carries the JWT authorizer; none is reachable without a token, and there is no shareable status page. A per-site `isPublic` opt-in and an open `GET /public/status` route existed in an earlier build and were removed; nothing reads that flag any more.
 
 Of the three fixes weighed earlier, this is the third — real authentication rather than a shared credential:
 
@@ -251,7 +240,7 @@ Of the three fixes weighed earlier, this is the third — real authentication ra
 ### What this still does not do
 
 - **CloudFront itself is not access-controlled.** The static HTML, CSS and JS are downloadable by anyone with the URL. There is nothing sensitive in them — the site list, statuses and incidents all arrive from the authenticated API — but the distribution is not private, and `config.js` publishes the API URL, the Cognito domain and the public client id. That is by design for a public OAuth client, not an oversight.
-- **CORS on the API is still `*`.** The JWT authorizer, not the origin header, is what protects `/status`; CORS was never doing that job. `/public/status` is meant to be open.
+- **CORS on the API is still `*`.** The JWT authorizer, not the origin header, is what protects every route; CORS was never doing that job. It stays open so the frontend can be run from `localhost` against a deployed API without a redeploy.
 - **No MFA, and no logging of who looked at what.** Adequate for a portfolio build, not for anything with a compliance story.
 - **`removalPolicy: DESTROY` covers the user pool too**, so `cdk destroy` takes the accounts with it.
 
@@ -310,15 +299,14 @@ cdk synth                          # sanity check, writes nothing to AWS
 cdk deploy
 ```
 
-Deploy prints ten outputs:
+Deploy prints nine outputs:
 
 | Output | What it is for |
 |---|---|
-| `DashboardUrl` | the CloudFront dashboard (login required); the public page is `<DashboardUrl>/public.html` |
+| `DashboardUrl` | the CloudFront dashboard (login required) |
 | `SitesAdminUrl` | monitor management — Admins and Editors |
 | `TeamAdminUrl` | user management — Admins |
 | `ApiUrl` | `GET /status` — needs a Cognito id token |
-| `PublicApiUrl` | `GET /public/status` — open, `isPublic` sites only |
 | `AdminApiUrl` | base path for `/admin/users` and `/admin/sites` — needs a token *and* the right group |
 | `CognitoLoginUrl` | the hosted UI login page |
 | `CognitoUserPoolId` | needed to create the first user, and to put them in `Admins` (below) |
@@ -340,8 +328,6 @@ python scripts/seed_sites.py                        # write to the Sites table
 
 The script finds the table name from the stack's `SitesTableName` output, so no table name or ARN is ever hardcoded. Re-running it updates existing sites while preserving their original `createdAt`; `--prune` also deletes sites that are no longer in the config.
 
-Add `"isPublic": true` to a site to put it on the public status page. It defaults to `false`, and a re-seed from a config that does not mention `isPublic` leaves whatever the table already says alone — the same treatment `createdAt` gets — so a site does not quietly stop being public because someone trimmed the config. Spelling the flag out explicitly always wins, including `"isPublic": false` to un-publish.
-
 The checker picks up the new sites on its next run, within a minute.
 
 Seeding is now optional: once you have an Admin (see [Bootstrapping the first admin](#bootstrapping-the-first-admin)), sites are added and edited from the **Monitors** page instead. `seed_sites.py` remains the way to load a list in bulk, and to keep a config file as the source of truth.
@@ -350,18 +336,16 @@ Seeding is now optional: once you have an Admin (see [Bootstrapping the first ad
 
 Visit the `DashboardUrl` output and sign in with a user you created (see [Creating a user](#creating-a-user) — there is no self-signup, so do this first). CloudFront can take a few minutes to finish deploying on first launch.
 
-The shareable public page is `<DashboardUrl>/public.html`. It needs no login and lists only the sites flagged `isPublic`.
-
 Monitor management is `<DashboardUrl>/sites.html` and user management is `<DashboardUrl>/team.html` (both printed as stack outputs). They appear in the side navigation for anyone whose token carries `Admins` or `Editors`; a Viewer never sees the links, and is redirected to the dashboard if they navigate there anyway.
 
-Running the frontend locally is only useful for the public page now, because the Cognito app client's callback URL is the CloudFront domain:
+Running the frontend locally means signing in locally, because every page now needs a token:
 
 ```bash
 cd frontend && python -m http.server 8000
-# then open http://localhost:8000/public.html?api=<PublicApiUrl output>
+# then open http://localhost:8000/?api=<ApiUrl output>
 ```
 
-To develop the authenticated page locally as well, add `http://localhost:8000/` to the app client's callback **and** sign-out URLs in the Cognito console — or to `callback_urls` / `logout_urls` in the stack, if you would rather it be code.
+For that to work, add `http://localhost:8000/` to the app client's callback **and** sign-out URLs in the Cognito console — or to `callback_urls` / `logout_urls` in the stack, if you would rather it be code. The API's CORS policy already allows any origin, so no API change is needed.
 
 ### Tearing down
 
@@ -429,11 +413,10 @@ mubwem/
 │   ├── team.html           user management (Admins)
 │   ├── settings.html       stub: read-only deploy config
 │   ├── integrations.html   stub: API URLs, no integrations
-│   ├── public.html         shareable public status page
 │   ├── auth.js             Cognito hosted UI login (auth code + PKCE)
 │   ├── nav.js              the shared side navigation
 │   ├── shell.js            per-page bootstrap: auth, nav, fetch, formatting
-│   ├── dashboard.js        monitor-card rendering, shared by index and public
+│   ├── dashboard.js        monitor-card rendering for the dashboard
 │   └── *.js                one bootstrap module per page
 ├── config/
 │   ├── config.example.json committed placeholders

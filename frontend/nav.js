@@ -215,14 +215,6 @@ window.MubwemNav = (function () {
       utility.appendChild(navItem(item, currentKey));
     });
 
-    var foot = document.createElement("div");
-    foot.className = "nav-foot";
-    var publicLink = document.createElement("a");
-    publicLink.href = "public.html";
-    publicLink.textContent = "Public status page";
-    foot.appendChild(publicLink);
-    utility.appendChild(foot);
-
     host.appendChild(utility);
 
     // A count set before the nav existed still lands.

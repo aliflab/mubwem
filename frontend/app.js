@@ -2,7 +2,7 @@
  *
  * Signs in against the Cognito hosted UI (auth.js via shell.js), then polls
  * GET /status with the id token as a bearer token. Rendering lives in
- * dashboard.js, shared with the public status page.
+ * dashboard.js.
  *
  * Cards link through to monitor.html rather than carrying their own stats and
  * incident list — that detail moved to the detail page.

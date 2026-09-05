@@ -1,18 +1,15 @@
 """MuBWeM status API Lambda.
 
-Behind an API Gateway HTTP API, serving four routes from one function:
+Behind an API Gateway HTTP API, serving two routes from one function. Both
+sit behind the Cognito JWT authorizer; there is no unauthenticated route:
 
-  GET /status                  authenticated (Cognito JWT authorizer) - every site
-  GET /status/{siteId}         authenticated - one site, with full detail
-  GET /public/status           unauthenticated - only sites with isPublic = true
-  GET /public/status/{siteId}  unauthenticated - one site, only if isPublic
+  GET /status                  every site
+  GET /status/{siteId}         one site, with full detail
 
-The list routes return everything the dashboard needs in one call, so the
-frontend does no joining of its own. The two list responses have an identical
-shape; the public one simply carries fewer sites. Same for the two detail
-routes.
+The list route returns everything the dashboard needs in one call, so the
+frontend does no joining of its own.
 
-LIST RESPONSE (GET /status, GET /public/status)
+LIST RESPONSE (GET /status)
 
 {
   "generatedAt": "2026-08-27T09:15:00.000Z",   # ISO8601 UTC, server time
@@ -81,7 +78,7 @@ This is a display distinction only. `uptime24h` remains the plain percentage
 of individual checks that succeeded and is not affected by which bucket colour
 an hour ends up with.
 
-DETAIL RESPONSE (GET /status/{siteId}, GET /public/status/{siteId})
+DETAIL RESPONSE (GET /status/{siteId})
 
 Everything a list entry carries, plus:
 
@@ -90,10 +87,6 @@ Everything a list entry carries, plus:
   "generatedAt": "...",
   "failureThreshold": 3
 }
-
-On the *authenticated* detail route only, `site` additionally carries
-`isPublic`, which the monitor page's edit form needs to pre-fill. The public
-detail route never returns it.
 
 where `checks` is the raw 24h time series for the response-time graph:
 
@@ -105,20 +98,9 @@ so the graph still spans the whole window.
 Sites are sorted down-first, then by name, so the dashboard can render in
 order without sorting.
 
-The per-site `isPublic` flag is never echoed back on either public route, nor
-on either list route: there it decides which sites are returned and says
-nothing else. The one exception is the authenticated detail route, noted
-above, where the edit form needs it. A private site and a site that does not
-exist are indistinguishable on the public detail route - both are the same
-404, with the same body.
-
-`checkIntervalSec` is deliberately *not* treated that way. It is returned on
-every entry from every route, including both public ones. It was once gated
-to the authenticated detail route alongside isPublic, which was a mistake by
-association: isPublic is gated because it governs visibility, while
-checkIntervalSec is a check frequency that governs nothing and reveals
-nothing a caller could not infer from watching the status change. The
-dashboard needs it per site to draw an honest countdown ring.
+There is no visibility filtering of any kind in this file: every caller has
+already been authenticated by the API Gateway authorizer, so every caller
+sees every site. A site that does not exist is a 404 on the detail route.
 """
 
 import json
@@ -153,12 +135,9 @@ MAX_CHECK_PAGES = 4
 # Enough points for a smooth line at 1440 samples without shipping every row.
 MAX_DETAIL_POINTS = 500
 
-# Route paths as API Gateway reports them in routeKey. The two private ones
-# are the only paths that ever unlock the full site list.
-PRIVATE_PATH = "/status"
-PRIVATE_DETAIL_PATH = "/status/{siteId}"
-PUBLIC_PATH = "/public/status"
-PUBLIC_DETAIL_PATH = "/public/status/{siteId}"
+# The list route's path, as API Gateway reports it. Only used to recover a
+# siteId from rawPath when pathParameters is absent.
+LIST_PATH = "/status"
 
 _dynamodb = boto3.resource(
     "dynamodb", config=Config(retries={"max_attempts": 3, "mode": "standard"})
@@ -498,16 +477,10 @@ def _strip_internal(entry):
     return entry
 
 
-def build_payload(public_only=False):
-    """Assemble the whole status document.
-
-    public_only filters the site list *before* any per-site work, so a site the
-    caller will never see costs no UptimeChecks query and no Incidents query.
-    """
+def build_payload():
+    """Assemble the whole status document for every site."""
     now = datetime.now(timezone.utc)
     sites = _scan_all(sites_table)
-    if public_only:
-        sites = [s for s in sites if s.get("isPublic") is True]
     statuses = {s["siteId"]: s for s in _scan_all(status_table)}
 
     entries = []
@@ -550,19 +523,12 @@ def thin_series(points, limit=MAX_DETAIL_POINTS):
     return sampled
 
 
-def build_site_payload(site_id, public_only=False):
-    """One site with full detail, or None if the caller may not see it.
-
-    None covers both "no such site" and "that site is private and this is the
-    public route". The caller turns both into the same 404 with the same body,
-    so the public route cannot be used to probe which site ids exist.
-    """
+def build_site_payload(site_id):
+    """One site with full detail, or None if no such site exists."""
     now = datetime.now(timezone.utc)
 
     record = sites_table.get_item(Key={"siteId": site_id}).get("Item")
     if not record:
-        return None
-    if public_only and record.get("isPublic") is not True:
         return None
 
     status = status_table.get_item(Key={"siteId": site_id}).get("Item") or {}
@@ -571,18 +537,6 @@ def build_site_payload(site_id, public_only=False):
     entry = site_entry(
         record, status, checks, now, incident_limit=INCIDENTS_DETAIL_LIMIT
     )
-
-    if not public_only:
-        # Only on the authenticated detail route, and only here. The monitor
-        # page's edit form has to pre-fill it, and an authenticated caller can
-        # already read it from GET /admin/sites. The public routes still never
-        # echo isPublic: there it decides which sites are returned at all, and
-        # says nothing else.
-        #
-        # checkIntervalSec used to be gated alongside it. It no longer is - it
-        # is on every entry from site_entry() - because it is a check
-        # frequency and nothing more. Nothing is decided by keeping it secret.
-        entry["isPublic"] = record.get("isPublic") is True
 
     entry["checks"] = [
         {
@@ -612,69 +566,43 @@ def _response(status_code, body):
     }
 
 
-def _resolve_route(event):
-    """(public_only, site_id) for this request.
+def _site_id_from(event):
+    """The {siteId} path parameter, or None on the list route.
 
-    Fail-closed in exactly the way the old _is_public_request was: a request is
-    treated as authenticated only when it is *confidently* identified as one of
-    the two private routes. Every ambiguity - no routeKey, an unfamiliar path,
-    an event shaped differently than expected - resolves to public, the
-    restrictive, less-data branch. The failure mode must never expose more than
-    an unauthenticated caller is entitled to.
-
-    site_id is None for the two list routes.
+    Every route reaching this function is authenticated, so there is nothing
+    to fail closed against any more - this only distinguishes list from
+    detail. An event with no usable siteId is the list route.
     """
     event = event if isinstance(event, dict) else {}
 
     params = event.get("pathParameters")
     site_id = params.get("siteId") if isinstance(params, dict) else None
-    site_id = str(site_id).strip() if site_id else None
+    if site_id:
+        return str(site_id).strip() or None
 
-    route_key = event.get("routeKey")
-    route_path = None
-    if isinstance(route_key, str) and " " in route_key:
-        route_path = route_key.split(" ", 1)[1].strip()
-
-    if route_path == PRIVATE_PATH:
-        return False, None
-    if route_path == PRIVATE_DETAIL_PATH:
-        return False, site_id
-    if route_path in (PUBLIC_PATH, PUBLIC_DETAIL_PATH):
-        return True, site_id if route_path == PUBLIC_DETAIL_PATH else None
-
-    # No usable routeKey. Fall back to the raw path, and only ever conclude
-    # "private" from an exact match on a private path.
+    # No pathParameters (some invocation shapes omit them). Fall back to the
+    # raw path, which for the detail route is /status/<id>.
     raw = event.get("rawPath")
     if not isinstance(raw, str) or not raw:
         http = (event.get("requestContext") or {}).get("http")
         raw = http.get("path") if isinstance(http, dict) else ""
     raw = (raw or "").rstrip("/")
 
-    if raw == PRIVATE_PATH:
-        return False, None
-    if raw.startswith(PRIVATE_PATH + "/"):
-        return False, urllib.parse.unquote(raw[len(PRIVATE_PATH) + 1 :]) or None
-    if raw.startswith(PUBLIC_PATH + "/"):
-        return True, urllib.parse.unquote(raw[len(PUBLIC_PATH) + 1 :]) or None
-    return True, None
+    if raw.startswith(LIST_PATH + "/"):
+        return urllib.parse.unquote(raw[len(LIST_PATH) + 1 :]) or None
+    return None
 
 
 def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda
-    public_only, site_id = _resolve_route(event)
+    site_id = _site_id_from(event)
     try:
         if site_id is None:
-            return _response(200, build_payload(public_only=public_only))
+            return _response(200, build_payload())
 
-        payload = build_site_payload(site_id, public_only=public_only)
+        payload = build_site_payload(site_id)
         if payload is None:
-            # Deliberately the same answer for "no such site" and "that site
-            # is private": one shape, one status code, nothing to probe with.
             return _response(404, {"error": "no such site"})
         return _response(200, payload)
     except Exception:  # noqa: BLE001 - always answer the dashboard with JSON
-        logger.exception(
-            "Failed to build status payload (public_only=%s, siteId=%s)",
-            public_only,
-            site_id,
-        )
+        logger.exception("Failed to build status payload (siteId=%s)", site_id)
         return _response(500, {"error": "internal error building status payload"})

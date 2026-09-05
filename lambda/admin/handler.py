@@ -74,7 +74,6 @@ EDITABLE_SITE_FIELDS = (
     "brand",
     "checkIntervalSec",
     "enabled",
-    "isPublic",
 )
 
 # The role name the API speaks, and the Cognito group it maps to.
@@ -288,11 +287,10 @@ def _clean_site_fields(payload, require_name_and_url):
             )
         fields["checkIntervalSec"] = interval
 
-    for flag in ("enabled", "isPublic"):
-        if flag in payload:
-            if not isinstance(payload[flag], bool):
-                raise Invalid("%s must be true or false" % flag)
-            fields[flag] = payload[flag]
+    if "enabled" in payload:
+        if not isinstance(payload["enabled"], bool):
+            raise Invalid("enabled must be true or false")
+        fields["enabled"] = payload["enabled"]
 
     return fields
 
@@ -357,10 +355,8 @@ def _handle_create_site(event):
         "url": fields["url"],
         "brand": fields.get("brand", "Unassigned"),
         "checkIntervalSec": fields.get("checkIntervalSec", 60),
-        # A new site starts off and private. Turning it on, and putting it on
-        # the public page, are both deliberate acts.
+        # A new site starts switched off. Turning it on is a deliberate act.
         "enabled": fields.get("enabled", False),
-        "isPublic": fields.get("isPublic", False),
         # Server time, always. A client-supplied createdAt is not evidence of
         # anything.
         "createdAt": _iso(datetime.now(timezone.utc)),

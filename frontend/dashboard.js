@@ -1,27 +1,19 @@
 /* MuBWeM monitor-list rendering — plain JS, no build step.
  *
- * Shared by the authenticated dashboard (app.js, GET /status) and the public
- * status page (public.js, GET /public/status). Both responses have the same
- * shape — documented at the top of lambda/api/handler.py — so exactly one
- * renderer serves both; the URL, the auth header, and how much detail belongs
- * on a card are what differ.
+ * Drives the authenticated dashboard (app.js, GET /status). The response
+ * shape is documented at the top of lambda/api/handler.py. renderStats and
+ * renderIncidents are also exported for monitor.js, so a site reads the same
+ * way on its detail page as it does on a card.
  *
  * Usage:
  *   MubwemDashboard.start({
  *     apiUrl: "https://.../status",
  *     headers: function () { return { Authorization: "Bearer ..." }; },  // optional
  *     onUnauthorized: function () { ... },                              // optional
- *     detailHref: function (siteId) { return "monitor.html?site=" + siteId; },
- *     inlineDetails: true      // keep stats + incidents on the card itself
+ *     detailHref: function (siteId) { return "monitor.html?site=" + siteId; }
  *   });
  *
- * detailHref and inlineDetails are the two modes. The dashboard sets
- * detailHref, so a card is a link and its detail lives on monitor.html. The
- * public page has no detail page to send anyone to, so it sets inlineDetails
- * instead and keeps the stats and incident list on the card — otherwise the
- * public page would lose information it has always shown and gain nothing.
- * inlineDetails has nowhere to go in a list row, so it applies to card density
- * only.
+ * detailHref makes each card a link through to its detail page.
  *
  * FILTERING
  *
@@ -498,15 +490,10 @@ window.MubwemDashboard = (function () {
     card.appendChild(renderHourlyBar(site, false));
     card.appendChild(renderUptimeFooter(site));
 
-    if (options.inlineDetails) {
-      card.appendChild(renderStats(site));
-      card.appendChild(renderIncidents(site));
-    }
-
     return card;
   }
 
-  /* The compact density. Same data as a card minus the inline detail, laid out
+  /* The compact density. Same data as a card, laid out
      as aligned columns so thirty monitors read as a table rather than as three
      screens of scrolling. */
   function renderRow(site, options) {

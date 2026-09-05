@@ -116,21 +116,6 @@
     );
     row.appendChild(enabledCell);
 
-    var publicCell = text("td", null, null);
-    publicCell.appendChild(
-      toggle(site.isPublic, function (value) {
-        return patchSite(site.siteId, { isPublic: value }).then(function () {
-          MubwemShell.showNotice(
-            site.name +
-              " is now " +
-              (value ? "on the public status page" : "private") +
-              "."
-          );
-        });
-      })
-    );
-    row.appendChild(publicCell);
-
     var actions = text("td", "cell-actions", null);
     // Admins only — matching what the backend will actually allow. An Editor
     // who needs a site to stop being checked turns Enabled off instead.

@@ -6,17 +6,16 @@
  * exist rather than offering toggles that would connect to nothing.
  *
  * Everything shown comes from the deploy-generated config.js, which is already
- * served to every browser that loads the dashboard. The API URLs and the
- * Cognito client id are public by design for a public OAuth client — see the
- * README's "What this still does not do".
+ * served to every browser that loads the dashboard. Both routes listed here
+ * need a Cognito id token in an Authorization: Bearer header, so there is no
+ * copy-and-run example — the API URLs and the Cognito client id are not
+ * secrets, but nothing is reachable without a token.
  */
 (function () {
   "use strict";
 
   var el = {
-    endpoints: document.getElementById("endpoint-list"),
-    curl: document.getElementById("curl-example"),
-    copy: document.getElementById("copy-curl")
+    endpoints: document.getElementById("endpoint-list")
   };
 
   function row(label, value, note) {
@@ -38,69 +37,31 @@
   }
 
   function render() {
-    var privateUrl = window.MUBWEM_API_URL || "";
-    var publicUrl = window.MUBWEM_PUBLIC_API_URL || "";
+    var statusUrl = window.MUBWEM_API_URL || "";
     var adminUrl = window.MUBWEM_ADMIN_API_URL || "";
 
     el.endpoints.innerHTML = "";
     row(
-      "Authenticated status",
-      privateUrl,
+      "Status",
+      statusUrl,
       "Every monitor. Requires a Cognito id token."
     );
     row(
-      "Authenticated detail",
-      privateUrl ? privateUrl + "/{siteId}" : "",
+      "Status detail",
+      statusUrl ? statusUrl + "/{siteId}" : "",
       "One monitor, with its 24h check series and incident history."
-    );
-    row(
-      "Public status",
-      publicUrl,
-      "Only monitors flagged public. No credentials."
-    );
-    row(
-      "Public detail",
-      publicUrl ? publicUrl + "/{siteId}" : "",
-      "One public monitor. Returns 404 for anything not flagged public."
     );
     row(
       "Admin",
       adminUrl ? adminUrl + "/{sites|users}" : "",
       "Requires a token and the right Cognito group. Not a machine API."
     );
-
-    el.curl.textContent = publicUrl
-      ? "curl -s " + publicUrl + " | jq ."
-      : "No public API URL configured — deploy the stack.";
   }
 
   MubwemShell.boot({
     page: "integrations",
     ready: function () {
       render();
-      el.copy.addEventListener("click", function () {
-        var textToCopy = el.curl.textContent;
-        // navigator.clipboard is unavailable on insecure origins; fall back to
-        // selecting the block so the user can copy it themselves rather than
-        // failing silently.
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(textToCopy).then(
-            function () {
-              MubwemShell.showNotice("Copied.");
-            },
-            function () {
-              MubwemShell.showNotice("Could not copy — select the text instead.");
-            }
-          );
-          return;
-        }
-        var range = document.createRange();
-        range.selectNodeContents(el.curl);
-        var selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-        MubwemShell.showNotice("Selected — press Ctrl/Cmd+C to copy.");
-      });
     }
   }).catch(function () {
     /* shell.js has already put the message on the page. */

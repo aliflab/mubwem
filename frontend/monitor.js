@@ -272,16 +272,15 @@
       "60s minimum — the scheduler cannot check more often."
     );
 
-    // One row for both switches. Giving each its own .field cell dropped them
-    // into whatever grid tracks the text inputs left over, which is how
-    // "Public status page" ended up alone, three lines tall and nowhere near
-    // its own checkbox.
+    // Its own row, outside the grid that tracks the text inputs — a switch
+    // dropped into a leftover grid cell lands three lines tall and nowhere
+    // near its own label.
     var checks = document.createElement("div");
     checks.className = "form-checks";
 
     /* A track-and-thumb switch, the same one the Monitors table uses, rather
        than a bare checkbox. The <input> keeps its name so
-       form.elements.enabled / .isPublic still read it. */
+       form.elements.enabled still reads it. */
     function toggleField(label, hint, name, checked) {
       var wrap = document.createElement("label");
       wrap.className = "switch-field";
@@ -319,12 +318,6 @@
       "enabled",
       site.enabled
     );
-    toggleField(
-      "Public status page",
-      "Visible on public.html with no sign-in.",
-      "isPublic",
-      site.isPublic
-    );
     form.appendChild(checks);
 
     var actions = document.createElement("div");
@@ -352,8 +345,7 @@
         url: form.elements.url.value.trim(),
         brand: form.elements.brand.value.trim(),
         checkIntervalSec: Number(form.elements.checkIntervalSec.value) || 60,
-        enabled: form.elements.enabled.checked,
-        isPublic: form.elements.isPublic.checked
+        enabled: form.elements.enabled.checked
       };
       if (!body.brand) delete body.brand;
 

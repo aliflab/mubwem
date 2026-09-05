@@ -10,9 +10,8 @@ Single CDK stack containing the whole Phase 1 (free tier) system:
   API Gateway HTTP API -> API Lambda -> DynamoDB
 
 The dashboard is login-gated by a Cognito user pool (admin-created users
-only, no self-signup) and GET /status sits behind a JWT authorizer. Sites
-flagged isPublic are also served unauthenticated on GET /public/status, for
-the shareable status page.
+only, no self-signup). Every route on the HTTP API sits behind the JWT
+authorizer - there is no unauthenticated route anywhere in the system.
 
 Access is role based, via three Cognito groups - Admins, Editors, Viewers.
 A second Lambda (AdminFunction) serves /admin/* behind the same JWT
@@ -341,7 +340,8 @@ class MubwemStack(Stack):
         # UI has to return the user to the page they were on, and the redirect
         # URI it is given must match a callback URL character for character -
         # so signing in from /incidents.html and landing back on "/" is not an
-        # option. Public pages are absent on purpose: they never sign in.
+        # option. Every page in the frontend needs a login, so every page that
+        # is not the root is listed here.
         AUTHENTICATED_PAGES = (
             "monitor.html",
             "incidents.html",
@@ -415,8 +415,8 @@ class MubwemStack(Stack):
             cors_preflight=apigwv2.CorsPreflightOptions(
                 # The dashboard is served from a CloudFront domain that only
                 # exists after this stack deploys, so the origin cannot be
-                # pinned here. /status is protected by the JWT authorizer
-                # rather than by CORS; /public/status is deliberately open.
+                # pinned here. Every route is protected by the JWT authorizer
+                # rather than by CORS, which was never doing that job.
                 allow_origins=["*"],
                 allow_methods=[
                     apigwv2.CorsHttpMethod.GET,
@@ -461,34 +461,13 @@ class MubwemStack(Stack):
             authorizer=dashboard_authorizer,
         )
 
-        # Unauthenticated: only sites flagged isPublic. Same Lambda, which
-        # branches on the request path - one function, one set of grants.
-        http_api.add_routes(
-            path="/public/status",
-            methods=[apigwv2.HttpMethod.GET],
-            integration=apigw_integrations.HttpLambdaIntegration(
-                "PublicStatusIntegration", api_fn
-            ),
-        )
-
-        # Unauthenticated detail. The Lambda answers 404 for a site that is
-        # not public and for a site that does not exist, with the same body
-        # either way, so this cannot be used to discover private site ids.
-        http_api.add_routes(
-            path="/public/status/{siteId}",
-            methods=[apigwv2.HttpMethod.GET],
-            integration=apigw_integrations.HttpLambdaIntegration(
-                "PublicSiteDetailIntegration", api_fn
-            ),
-        )
-
         # ------------------------------------------------------------------
         # Admin Lambda + /admin/* routes
         # ------------------------------------------------------------------
         # Deliberately a second function with its own role rather than more
-        # routes on ApiFunction: the status API is public-facing and reads four
-        # tables, this one can administer the user pool. Keeping them apart
-        # keeps that capability off the function anyone can reach anonymously.
+        # routes on ApiFunction: the status API reads four tables, this one can
+        # administer the user pool. Keeping them apart means a bug in the
+        # read-only status path cannot reach the user pool.
         admin_fn_role = iam.Role(
             self,
             "AdminFunctionRole",
@@ -579,8 +558,6 @@ class MubwemStack(Stack):
         config_js = "\n".join(
             [
                 'window.MUBWEM_API_URL = "%s/status";' % http_api.api_endpoint,
-                'window.MUBWEM_PUBLIC_API_URL = "%s/public/status";'
-                % http_api.api_endpoint,
                 'window.MUBWEM_ADMIN_API_URL = "%s/admin";' % http_api.api_endpoint,
                 'window.MUBWEM_COGNITO_DOMAIN = "%s";' % user_pool_domain.base_url(),
                 'window.MUBWEM_COGNITO_CLIENT_ID = "%s";'
@@ -621,7 +598,6 @@ class MubwemStack(Stack):
         # ------------------------------------------------------------------
         CfnOutput(self, "DashboardUrl", value=dashboard_url)
         CfnOutput(self, "ApiUrl", value=http_api.api_endpoint + "/status")
-        CfnOutput(self, "PublicApiUrl", value=http_api.api_endpoint + "/public/status")
         CfnOutput(
             self,
             "AdminApiUrl",

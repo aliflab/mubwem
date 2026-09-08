@@ -14,6 +14,7 @@
     "_comment": "MuBWeM configuration. Override any of these at deploy time with -c key=value, or via MUBWEM_-prefixed env vars in a gitignored .env at the repo root. Never commit a real email address here.",
 
     "alertEmail": "CHANGE_ME@example.com",
+    "senderEmail": "CHANGE_ME@example.com",
     "failureThreshold": 3,
     "checkTimeoutSec": 8,
     "checksTtlDays": 30,

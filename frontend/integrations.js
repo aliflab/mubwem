@@ -1,9 +1,10 @@
 /* MuBWeM integrations & API — informational stub.
  *
- * There is nothing to integrate with yet: alerting is one SNS topic with one
- * email subscription, fixed at deploy time, and there are no webhooks, no API
- * keys and no third-party targets. So this page documents the routes that do
- * exist rather than offering toggles that would connect to nothing.
+ * There is nothing to integrate with yet: alerting is one SES sender and one
+ * recipient, fixed at deploy time, with an SNS topic behind it as the
+ * plain-text fallback. There are no webhooks, no API keys and no third-party
+ * targets, so this page documents the routes that do exist rather than
+ * offering toggles that would connect to nothing.
  *
  * Everything shown comes from the deploy-generated config.js, which is already
  * served to every browser that loads the dashboard. Both routes listed here

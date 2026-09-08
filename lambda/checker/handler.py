@@ -5,9 +5,13 @@ Runs once a minute from EventBridge Scheduler. For every enabled site it:
   1. issues an HTTPS GET and records status code + response time,
   2. appends a row to UptimeChecks (TTL'd after CHECKS_TTL_DAYS),
   3. updates CurrentStatus (consecutiveFailures up on failure, 0 on success),
-  4. opens an Incident + publishes an SNS alert once consecutiveFailures
-     reaches FAILURE_THRESHOLD, and closes the open Incident + publishes a
-     recovery alert on the first success afterwards.
+  4. opens an Incident + sends a DOWN alert once consecutiveFailures reaches
+     FAILURE_THRESHOLD, and closes the open Incident + sends a RESOLVED alert
+     on the first success afterwards.
+
+Alerts go out through SES as a designed HTML mail (see email_templates.py),
+with the SNS topic kept as the fallback for when SES will not send - an
+unverified identity or a throttle must not cost an alert.
 
 Only the stdlib and boto3 are used, so the function needs no bundled deps.
 """
@@ -20,6 +24,7 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -28,6 +33,8 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
+
+import email_templates
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -43,12 +50,21 @@ CHECK_TIMEOUT_SEC = int(os.environ.get("CHECK_TIMEOUT_SEC", "8"))
 CHECKS_TTL_DAYS = int(os.environ.get("CHECKS_TTL_DAYS", "30"))
 CHECK_REGION = os.environ.get("CHECK_REGION", "unknown")
 
+# Alert delivery. ALERT_EMAIL/SENDER_EMAIL are what SES needs; without them
+# the checker still alerts, just through SNS in plain text. DASHBOARD_URL is
+# the CloudFront domain, set by the stack once the distribution exists - if it
+# is missing the mail simply carries no "View details" button.
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "") or ALERT_EMAIL
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
+
 USER_AGENT = "MuBWeM-Monitor/1.0 (+uptime check)"
 MAX_PARALLEL_CHECKS = 10
 
 _boto_config = Config(retries={"max_attempts": 3, "mode": "standard"})
 _dynamodb = boto3.resource("dynamodb", config=_boto_config)
 _sns = boto3.client("sns", config=_boto_config)
+_ses = boto3.client("ses", config=_boto_config)
 
 sites_table = _dynamodb.Table(SITES_TABLE)
 checks_table = _dynamodb.Table(UPTIME_CHECKS_TABLE)
@@ -225,6 +241,11 @@ def open_incident(result, checked_at, consecutive_failures):
         "durationSec": None,
         "triggerReason": "%d consecutive failures - %s"
         % (consecutive_failures, reason),
+        # The cause on its own, so the recovery mail can quote it without
+        # unpicking the sentence above. triggerReason keeps its exact wording
+        # because frontend/incidents.js renders it verbatim.
+        "rootCause": reason,
+        "region": CHECK_REGION,
         "resolved": False,
     }
     incidents_table.put_item(Item=item)
@@ -266,6 +287,50 @@ def publish_alert(subject, message):
         logger.exception("Failed to publish SNS alert")
 
 
+def details_url(site_id):
+    """Deep link to this monitor's page - the same URL the dashboard builds.
+
+    Empty when the stack has not handed the checker a dashboard URL, which the
+    templates read as "draw no button" rather than a link to nowhere.
+    """
+    if not DASHBOARD_URL:
+        return ""
+    return "%s/monitor.html?site=%s" % (
+        DASHBOARD_URL,
+        urllib.parse.quote(str(site_id), safe=""),
+    )
+
+
+def send_alert(subject, text_body, html_body):
+    """SES first for the HTML mail, SNS plain text if SES will not take it.
+
+    Both paths swallow their errors: an undeliverable alert is bad, a sweep
+    that dies mid-flight because of one is worse.
+    """
+    if SENDER_EMAIL and ALERT_EMAIL:
+        try:
+            _ses.send_email(
+                Source=SENDER_EMAIL,
+                Destination={"ToAddresses": [ALERT_EMAIL]},
+                Message={
+                    "Subject": {"Data": subject[:255], "Charset": "UTF-8"},
+                    "Body": {
+                        "Text": {"Data": text_body, "Charset": "UTF-8"},
+                        "Html": {"Data": html_body, "Charset": "UTF-8"},
+                    },
+                },
+            )
+            return
+        except ClientError:
+            # Almost always an unverified identity or a sending cap. Fall
+            # through so the alert still reaches someone.
+            logger.exception("SES send failed, falling back to SNS")
+        except Exception:  # noqa: BLE001 - never let alerting kill the sweep
+            logger.exception("Unexpected SES failure, falling back to SNS")
+
+    publish_alert(subject, text_body)
+
+
 def handle_transitions(result, status_item, checked_at):
     """Open or close incidents based on the freshly-written status row."""
     site_id = result["siteId"]
@@ -277,40 +342,39 @@ def handle_transitions(result, status_item, checked_at):
         if failures >= FAILURE_THRESHOLD and open_inc is None:
             reason = result["error"] or "HTTP %s" % result["statusCode"]
             open_incident(result, checked_at, failures)
-            publish_alert(
-                "[MuBWeM] DOWN: %s" % name,
-                "\n".join(
-                    [
-                        "%s is DOWN." % name,
-                        "",
-                        "URL:            %s" % result["url"],
-                        "Reason:         %s" % reason,
-                        "Status code:    %s" % (result["statusCode"] or "n/a"),
-                        "Consecutive failures: %d (threshold %d)"
-                        % (failures, FAILURE_THRESHOLD),
-                        "Detected at:    %s (checked from %s)"
-                        % (checked_at, CHECK_REGION),
-                    ]
-                ),
+            send_alert(
+                *email_templates.render_down(
+                    {
+                        "name": name,
+                        "url": result["url"],
+                        "root_cause": reason,
+                        "started_at": checked_at,
+                        "location": CHECK_REGION,
+                        "details_url": details_url(site_id),
+                    }
+                )
             )
             return "incident_opened"
         return "failing" if failures else "down"
 
     if open_inc is not None:
         duration = close_incident(open_inc, result, checked_at)
-        publish_alert(
-            "[MuBWeM] RECOVERED: %s" % name,
-            "\n".join(
-                [
-                    "%s is back UP." % name,
-                    "",
-                    "URL:            %s" % result["url"],
-                    "Status code:    %s" % result["statusCode"],
-                    "Response time:  %dms" % result["responseTimeMs"],
-                    "Downtime:       %ds (%s -> %s)"
-                    % (duration, open_inc["startedAt"], checked_at),
-                ]
-            ),
+        send_alert(
+            *email_templates.render_recovered(
+                {
+                    "name": name,
+                    "url": result["url"],
+                    # rootCause is written by open_incident; triggerReason
+                    # covers incidents opened before that field existed.
+                    "root_cause": open_inc.get("rootCause")
+                    or open_inc.get("triggerReason"),
+                    "started_at": open_inc["startedAt"],
+                    "resolved_at": checked_at,
+                    "duration_sec": duration,
+                    "location": open_inc.get("region") or CHECK_REGION,
+                    "details_url": details_url(site_id),
+                }
+            )
         )
         return "incident_closed"
 

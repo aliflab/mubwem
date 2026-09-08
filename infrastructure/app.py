@@ -22,6 +22,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # entries, e.g. MUBWEM_ALERT_EMAIL -> alertEmail.
 ENV_OVERRIDES = {
     "MUBWEM_ALERT_EMAIL": "alertEmail",
+    "MUBWEM_SENDER_EMAIL": "senderEmail",
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",
     "MUBWEM_CHECK_TIMEOUT_SEC": "checkTimeoutSec",
     "MUBWEM_CHECKS_TTL_DAYS": "checksTtlDays",
@@ -49,10 +50,21 @@ load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
 app = cdk.App()
 
+def is_placeholder(value) -> bool:
+    """True for a cdk.json stand-in that an env var is allowed to replace.
+
+    The sentinel is how this file tells a placeholder apart from an explicit
+    -c flag - CDK merges both into the same context. cdk.json ships
+    "CHANGE_ME@example.com", not a bare "CHANGE_ME", so this has to match the
+    substring the way the stack's own guard does.
+    """
+    return value in (None, "") or "CHANGE_ME" in str(value)
+
+
 # Env vars win over cdk.json placeholders, but never over an explicit -c flag.
 for env_key, context_key in ENV_OVERRIDES.items():
     value = os.environ.get(env_key)
-    if value and app.node.try_get_context(context_key) in (None, "", "CHANGE_ME"):
+    if value and is_placeholder(app.node.try_get_context(context_key)):
         app.node.set_context(context_key, value)
 
 region = app.node.try_get_context("region") or os.environ.get(

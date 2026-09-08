@@ -141,7 +141,7 @@
       channelRow(
         "mail",
         "Email",
-        "One SNS topic with a single subscribed address, set at deploy time via alertEmail.",
+        "One SES recipient, set at deploy time via alertEmail, with an SNS topic as the fallback.",
         true
       )
     );

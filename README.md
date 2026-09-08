@@ -58,10 +58,16 @@ All four are **on-demand (PAY_PER_REQUEST)**.
 
 ### Alert flow
 
-5. When `consecutiveFailures` reaches the threshold (default **3**, i.e. ~3 minutes down) **and** no incident is already open, it opens an **Incident** and publishes a `DOWN` alert to SNS.
-6. On the first success after an open incident, it sets `endedAt` and `durationSec`, marks the incident `resolved`, and publishes a `RECOVERED` alert.
+5. When `consecutiveFailures` reaches the threshold (default **3**, i.e. ~3 minutes down) **and** no incident is already open, it opens an **Incident** and sends a `DOWN` alert.
+6. On the first success after an open incident, it sets `endedAt` and `durationSec`, marks the incident `resolved`, and sends a `RESOLVED` alert.
 
 Requiring three consecutive failures is what keeps a single flaky check from paging you. Requiring "no incident already open" is what keeps a two-hour outage from sending an email every minute.
+
+**What the alert looks like.** Both mails are HTML, rendered by `lambda/checker/email_templates.py` and sent through **SES**: a coloured status banner, a field table, and a **View details** button that deep-links to that monitor's page on the dashboard. The `DOWN` mail carries monitor name, URL, root cause, incident start time and location; the `RESOLVED` mail adds when it was resolved and how long the outage lasted. "Location" is the region the check ran from, shown as a friendly name (`Sydney, Australia (ap-southeast-2)`) — every check runs from the one region the stack is deployed to.
+
+Because the dashboard is entirely login-gated, the button lands on the Cognito hosted UI first and returns the reader to the monitor page after sign-in.
+
+**SES first, SNS as the fallback.** SNS's `email` protocol is plain text only, so it cannot carry a designed mail. The SNS topic is still wired up: if SES refuses a send — an identity nobody verified, a sending cap — the checker falls back to publishing the plain-text version of the same alert to the topic rather than losing it. Every mail is rendered in both HTML and plain text for that reason.
 
 ### Dashboard
 
@@ -146,7 +152,7 @@ Filtering never re-sorts. The API returns sites down-first then by name, and tha
 > instead of coming back. Adding `"add-monitor.html"` to that tuple and
 > redeploying fixes it; nothing else about the page needs a backend change.
 
-`settings.html` and `integrations.html` are **placeholders, shipped as placeholders**. Neither has a control that changes anything, and both say so on the page. There is nothing behind them to configure yet: alerting is one SNS topic with one email subscription fixed at deploy time, and there are no webhooks, API keys or third-party targets. See the [roadmap](#roadmap-later-phases).
+`settings.html` and `integrations.html` are **placeholders, shipped as placeholders**. Neither has a control that changes anything, and both say so on the page. There is nothing behind them to configure yet: alerting is one SES sender and one recipient fixed at deploy time (with an SNS topic behind it as the fallback), and there are no webhooks, API keys or third-party targets. See the [roadmap](#roadmap-later-phases).
 
 Each card carries a small SVG ring counting down to that site's next check. It is drawn from `lastCheckedAt` in the `/status` payload plus `scheduleIntervalSec` (published in the deploy-generated `config.js`, derived from the same `scheduleExpression` that drives EventBridge Scheduler), and it ticks once a second rather than once per 20-second poll so it moves smoothly. It is an **approximation**: the browser gets no live signal from EventBridge, so the ring shows where the next tick should land if the sweep keeps its cadence, not when it will actually fire.
 
@@ -274,6 +280,7 @@ cp .env.example .env               # .env is gitignored
 | Setting | Env var | Context key | Default |
 |---|---|---|---|
 | Alert email (**required**) | `MUBWEM_ALERT_EMAIL` | `alertEmail` | none — deploy fails without it |
+| Alert *sender* address | `MUBWEM_SENDER_EMAIL` | `senderEmail` | the alert email |
 | Failure threshold | `MUBWEM_FAILURE_THRESHOLD` | `failureThreshold` | `3` |
 | HTTP timeout (sec) | `MUBWEM_CHECK_TIMEOUT_SEC` | `checkTimeoutSec` | `8` |
 | Check retention (days) | `MUBWEM_CHECKS_TTL_DAYS` | `checksTtlDays` | `30` |
@@ -311,11 +318,18 @@ Deploy prints nine outputs:
 | `CognitoLoginUrl` | the hosted UI login page |
 | `CognitoUserPoolId` | needed to create the first user, and to put them in `Admins` (below) |
 | `SitesTableName` | used by `scripts/seed_sites.py` |
-| `AlertTopicArn` | the SNS topic behind the email alerts |
+| `AlertTopicArn` | the SNS topic used as the plain-text alert fallback |
 
-### 4. Confirm the SNS email subscription
+### 4. Verify the email addresses
 
-AWS sends a "Subscription Confirmation" email to the address you configured. **Click the confirmation link** — until you do, no alerts are delivered. Check spam if it does not arrive within a minute.
+The deploy sends **two** mails to the address you configured. Click both; check spam if they do not arrive within a minute.
+
+1. **"Amazon Web Services – Email Address Verification Request"** — SES. Until this is verified, SES refuses to send and every alert arrives as the plain-text SNS fallback instead of the HTML mail.
+2. **"AWS Notification – Subscription Confirmation"** — SNS. This is the fallback path; without it a failed SES send has nowhere to go.
+
+If `senderEmail` differs from `alertEmail`, both addresses get a SES verification mail and both need verifying.
+
+> **SES sandbox.** A new AWS account starts in the SES sandbox, where mail can only be sent *to* verified addresses. That is fine here — there is one recipient — which is why `senderEmail` defaults to `alertEmail`: one verified address covers both ends. Ask AWS for production access only if you later want to alert an address you cannot verify.
 
 ### 5. Seed your sites
 
@@ -434,6 +448,6 @@ mubwem/
 - Federating the Cognito pool to organizational SSO, and WAF/IP restriction in front of CloudFront
 - Honouring per-site `checkIntervalSec` instead of a fixed one-minute sweep
 - An audit log of admin actions — who changed which site or role, and when
-- **Settings (`settings.html`) is a stub.** Per-user notification preferences, alert routing beyond the single SNS email, maintenance windows and per-site failure thresholds are all unbuilt. The page shows deploy-time config read-only and says so.
+- **Settings (`settings.html`) is a stub.** Per-user notification preferences, alert routing beyond the single email recipient, maintenance windows and per-site failure thresholds are all unbuilt. The page shows deploy-time config read-only and says so.
 - **Integrations & API (`integrations.html`) is a stub.** No webhooks, no Slack/Teams/PagerDuty targets, no API keys, no published OpenAPI description. The page documents the existing routes and says so.
 - **A real incident history.** `incidents.html` is assembled from the dashboard feed, which carries only the 5 most recent incidents per monitor — so it shows recent history, not a complete log. A full view needs a paginated cross-site query over the Incidents table, which is a genuine feature (unbounded reads over a table that only grows), not a tweak to that page.

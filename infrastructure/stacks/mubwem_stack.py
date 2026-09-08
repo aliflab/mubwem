@@ -4,7 +4,8 @@ Single CDK stack containing the whole Phase 1 (free tier) system:
 
   EventBridge Scheduler (1 min) -> Checker Lambda -> DynamoDB (4 tables)
                                          |
-                                         +-> SNS topic -> email alert
+                                         +-> SES -> HTML alert email
+                                         +-> SNS topic (fallback, plain text)
 
   CloudFront -> S3 (static dashboard), which fetches
   API Gateway HTTP API -> API Lambda -> DynamoDB
@@ -47,6 +48,7 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3_deploy
 from aws_cdk import aws_scheduler as scheduler
+from aws_cdk import aws_ses as ses
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sns_subscriptions as sns_subs
 from constructs import Construct
@@ -87,6 +89,14 @@ class MubwemStack(Stack):
                 "Context value 'alertEmail' must be set to a real address, e.g. "
                 "cdk deploy -c alertEmail=you@yourdomain.com"
             )
+
+        # The From address on the HTML alert. Defaults to the alert address,
+        # which is the useful default rather than a lazy one: while the account
+        # is in the SES sandbox both From and To have to be verified
+        # identities, and one address satisfies both.
+        sender_email = self.node.try_get_context("senderEmail")
+        if not sender_email or "CHANGE_ME" in str(sender_email):
+            sender_email = alert_email
 
         failure_threshold = int(self.node.try_get_context("failureThreshold") or 3)
         check_timeout_sec = int(self.node.try_get_context("checkTimeoutSec") or 8)
@@ -158,8 +168,31 @@ class MubwemStack(Stack):
         )
 
         # ------------------------------------------------------------------
-        # SNS alert topic + email subscription
+        # Alert delivery
+        #
+        # SES carries the real mail - SNS's email protocol is plain text only,
+        # so a designed alert with a "View details" button cannot go through
+        # it. The SNS topic stays as the fallback path: if SES refuses (an
+        # identity that was never verified, a sending cap), the checker still
+        # gets a plain-text alert out rather than losing it.
+        #
+        # Creating the identity only asks AWS to send the verification mail.
+        # Nobody is verified until someone clicks the link in it.
         # ------------------------------------------------------------------
+        sender_identity = ses.EmailIdentity(
+            self,
+            "AlertSenderIdentity",
+            identity=ses.Identity.email(sender_email),
+        )
+        if sender_email != alert_email:
+            # In the SES sandbox the recipient needs verifying too; when the
+            # two addresses match the identity above already covers it.
+            ses.EmailIdentity(
+                self,
+                "AlertRecipientIdentity",
+                identity=ses.Identity.email(alert_email),
+            )
+
         alert_topic = sns.Topic(self, "AlertTopic", display_name="MuBWeM Alerts")
         alert_topic.add_subscription(sns_subs.EmailSubscription(alert_email))
 
@@ -181,6 +214,8 @@ class MubwemStack(Stack):
                 "CURRENT_STATUS_TABLE": current_status_table.table_name,
                 "INCIDENTS_TABLE": incidents_table.table_name,
                 "ALERT_TOPIC_ARN": alert_topic.topic_arn,
+                "ALERT_EMAIL": alert_email,
+                "SENDER_EMAIL": sender_email,
                 "FAILURE_THRESHOLD": str(failure_threshold),
                 "CHECK_TIMEOUT_SEC": str(check_timeout_sec),
                 "CHECKS_TTL_DAYS": str(checks_ttl_days),
@@ -193,6 +228,16 @@ class MubwemStack(Stack):
         current_status_table.grant_read_write_data(checker_fn)
         incidents_table.grant_read_write_data(checker_fn)
         alert_topic.grant_publish(checker_fn)
+
+        # Scoped to the From identity: SES authorises a send against the
+        # identity the mail claims to come from, so that is the only resource
+        # this function needs.
+        checker_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ses:SendEmail"],
+                resources=[sender_identity.email_identity_arn],
+            )
+        )
 
         # ------------------------------------------------------------------
         # EventBridge Scheduler - invoke the checker every minute
@@ -332,6 +377,13 @@ class MubwemStack(Stack):
         )
 
         dashboard_url = "https://" + distribution.domain_name
+
+        # The checker is defined long before the distribution exists, so the
+        # dashboard URL it puts in the "View details" button has to be added
+        # here. No cycle: the distribution depends on the bucket, the checker
+        # on the tables and the topic.
+        checker_fn.add_environment("DASHBOARD_URL", dashboard_url)
+
         # Trailing slash: CloudFront serves index.html at "/", and the redirect
         # URI the browser sends has to match a callback URL character for
         # character.

@@ -70,6 +70,14 @@
     }
   }
 
+  /* Capture it now, for the side effect, before anything can navigate away.
+     The alert email links straight here, so the reader is usually signed out:
+     MubwemShell.boot() below hands off to MubwemAuth.init(), which redirects
+     to the hosted UI without ever returning. Reading ?site= only inside
+     load() would be too late - by the time load() runs the URL is
+     monitor.html?code=... and the site id is gone. */
+  siteId();
+
   // ------------------------------------------------------------------ render
   function renderOverview(site) {
     document.title = "MuBWeM — " + site.name;

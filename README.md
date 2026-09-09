@@ -2,13 +2,11 @@
 
 **MuBWeM** = **Mu**lti-**B**rand **We**bsite **M**onitor: one uptime monitor watching the websites of several brands from a single dashboard.
 
-An UptimeRobot-style uptime monitor built on AWS with CDK (Python). It checks a list of sites every minute, records every check, opens and closes incidents, emails you when something goes down or recovers, and serves a static status dashboard from CloudFront.
+An UptimeRobot-style uptime monitor built on AWS with CDK (Python). It checks a list of sites every minute, records every check, opens and closes incidents, emails you when something goes down or recovers, and serves a static dashboard from CloudFront.
 
-The dashboard is behind a Cognito login. Every route in the system requires a valid token — there is no public or unauthenticated access anywhere.
+Everything is behind a Cognito login — there is no public or unauthenticated route anywhere. Access is role based: **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI.
 
-Access is role based: **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI. See [Roles and access control](#roles-and-access-control).
-
-This repo is **Phase 1: the free tier test build**. It is a portfolio project — no real company data, no hardcoded secrets, no hardcoded email addresses or ARNs anywhere in committed code.
+This repo is **Phase 1: the free tier test build**. It is a portfolio project — no real company data, and no hardcoded secrets, email addresses or ARNs in committed code.
 
 ---
 
@@ -16,35 +14,21 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 
 ![MuBWeM architecture diagram](docs/mubwem.drawio.svg)
 
-*Diagram source: `docs/mubwem.drawio` — open with [draw.io](https://app.diagrams.net) or the draw.io desktop app to edit.*
+*Diagram source: `docs/mubwem.drawio` — edit with [draw.io](https://app.diagrams.net) and re-export the SVG over the top.*
 
-> **TODO — the diagram is further out of date than it was.** It still shows
-> the pre-authentication topology: the warning markers on the CloudFront and
-> `/status` edges, and no Cognito at all. It needs a user pool feeding a JWT
-> authorizer in front of every route.
->
-> Role-based access has since added more that is missing entirely: three
-> Cognito **user pool groups** (Admins / Editors / Viewers), a second
-> **AdminFunction** Lambda with its own IAM role, the eight `/admin/*` routes
-> behind the same JWT authorizer, and that Lambda's two arrows — one to the
-> Sites table, one to the Cognito user pool.
->
-> The dashboard overhaul added more again: a second status route
-> (`GET /status/{siteId}`, also behind the authorizer), and seven pages
-> hanging off CloudFront rather than three — dashboard, monitor detail,
-> incidents, monitors, team members, settings, integrations.
->
-> Edit `docs/mubwem.drawio` and re-export `docs/mubwem.drawio.svg` over the top.
+> **TODO — the diagram is out of date.** It still shows the pre-authentication
+> topology: no Cognito, no JWT authorizer, no `AdminFunction`, and only three
+> pages hanging off CloudFront instead of eight.
 
 ### The four tables
 
-All four are **on-demand (PAY_PER_REQUEST)**.
+All four are on-demand (`PAY_PER_REQUEST`).
 
 | Table | Keys | What it holds |
 |---|---|---|
-| **Sites** | PK `siteId` | `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list, managed from the admin panel or seeded from `config/config.json` |
-| **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — the raw history, auto-expired after 30 days by DynamoDB TTL |
-| **CurrentStatus** | PK `siteId` | `currentStatus` (`up`/`down`), `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` — the one row the dashboard reads per site |
+| **Sites** | PK `siteId` | `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list |
+| **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — raw history, TTL-expired after 30 days |
+| **CurrentStatus** | PK `siteId` | `currentStatus`, `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
 
 ### Checker flow
@@ -52,172 +36,114 @@ All four are **on-demand (PAY_PER_REQUEST)**.
 `lambda/checker/handler.py` runs once a minute:
 
 1. Scans **Sites** and keeps the enabled ones.
-2. Checks each site in parallel (up to 10 at a time) with an HTTPS GET, timeout from `checkTimeoutSec`. `2xx`/`3xx` is up; anything else — including a timeout, DNS failure, or TLS error — is down.
-3. Writes a row to **UptimeChecks** with a 30-day TTL.
-4. Updates **CurrentStatus** with a single atomic DynamoDB expression: `consecutiveFailures + 1` on failure, `0` on success.
+2. Checks each in parallel (up to 10 at a time) with an HTTPS GET, timeout from `checkTimeoutSec`. `2xx`/`3xx` is up; anything else — timeout, DNS failure, TLS error — is down.
+3. Writes an **UptimeChecks** row with a 30-day TTL.
+4. Updates **CurrentStatus** in one atomic expression: `consecutiveFailures + 1` on failure, `0` on success.
+5. When `consecutiveFailures` reaches the threshold (default **3**) **and** no incident is already open, opens an **Incident** and sends a `DOWN` alert.
+6. On the first success after an open incident, closes it (`endedAt`, `durationSec`, `resolved`) and sends a `RESOLVED` alert.
 
-### Alert flow
+Three consecutive failures is what stops a single flaky check from paging you. "No incident already open" is what stops a two-hour outage emailing every minute.
 
-5. When `consecutiveFailures` reaches the threshold (default **3**, i.e. ~3 minutes down) **and** no incident is already open, it opens an **Incident** and sends a `DOWN` alert.
-6. On the first success after an open incident, it sets `endedAt` and `durationSec`, marks the incident `resolved`, and sends a `RESOLVED` alert.
+### Alerting
 
-Requiring three consecutive failures is what keeps a single flaky check from paging you. Requiring "no incident already open" is what keeps a two-hour outage from sending an email every minute.
+Both mails are HTML, rendered by `lambda/checker/email_templates.py` and sent through **SES**: a coloured status banner, a field table, and a **View details** button deep-linking to that monitor's page. The `DOWN` mail carries name, URL, root cause, start time and location; `RESOLVED` adds resolution time and outage duration. Location is the region the check ran from, shown as a friendly name (`Sydney, Australia (ap-southeast-2)`).
 
-**What the alert looks like.** Both mails are HTML, rendered by `lambda/checker/email_templates.py` and sent through **SES**: a coloured status banner, a field table, and a **View details** button that deep-links to that monitor's page on the dashboard. The `DOWN` mail carries monitor name, URL, root cause, incident start time and location; the `RESOLVED` mail adds when it was resolved and how long the outage lasted. "Location" is the region the check ran from, shown as a friendly name (`Sydney, Australia (ap-southeast-2)`) — every check runs from the one region the stack is deployed to.
+**SES first, SNS as the fallback.** SNS's `email` protocol is plain text only, so it cannot carry a designed mail. The topic is still wired up: if SES refuses a send, the checker publishes the plain-text version there rather than losing it. Every mail is rendered in both formats for that reason.
 
-Because the dashboard is entirely login-gated, the button lands on the Cognito hosted UI first and returns the reader to the monitor page after sign-in.
+**Bounce and complaint detection.** `send_email` returning a `MessageId` means SES accepted the mail, not that it was delivered — a typo'd domain is accepted and hard-bounces minutes later, with nothing to fall back on. A **SES configuration set**, attached to the sender identity and named on every send, forwards `bounce` and `complaint` events to a separate SNS topic (`DeliveryFailureTopicArn`). `delivery` events are deliberately not subscribed. The SNS topic policy scopes SES's publish rights by `aws:SourceAccount` and by this configuration set's ARN.
 
-**SES first, SNS as the fallback.** SNS's `email` protocol is plain text only, so it cannot carry a designed mail. The SNS topic is still wired up: if SES refuses a send — an identity nobody verified, a sending cap — the checker falls back to publishing the plain-text version of the same alert to the topic rather than losing it. Every mail is rendered in both HTML and plain text for that reason.
+> This is **detection only, on purpose**. The notification arrives as raw SES event JSON, and nothing retries the send, re-alerts the incident, or suppresses a repeatedly bouncing address. The goal was to turn "a bad alert address is invisible" into "a bad alert address puts something ugly in your inbox".
 
-**Bounce and complaint detection.** That fallback only covers failures SES reports *synchronously*. `send_email` returns a `MessageId` the moment SES accepts a mail, which is not the same as delivering it — a syntactically valid but undeliverable address (a typo'd domain, a dead mailbox) is accepted, returns success, and hard-bounces minutes later. The checker cannot see that, so nothing falls back and the alert is silently lost.
+### Status API
 
-A **SES configuration set** closes that blind spot. It is attached to the sender identity *and* named explicitly on every `send_email` call, and it forwards `bounce` and `complaint` events to their own SNS topic (`DeliveryFailureTopicArn`), separate from the plain-text fallback topic. `delivery` events are deliberately **not** subscribed — they would fire on every successful send and turn the topic into noise nobody reads.
+`lambda/api/handler.py` serves two routes from one function. The exact response shape is documented at the top of that file.
 
-The recipient defaults to `alertEmail` and is overridable with `bounceAlertEmail` / `MUBWEM_BOUNCE_ALERT_EMAIL`.
-
-The SNS topic policy that lets SES publish is generated by the CDK L2 and scoped two ways: `aws:SourceAccount` to this account (without which any AWS account's SES could publish into the topic) and `aws:SourceArn` to this one configuration set rather than all SES activity in the account.
-
-> **This pass is detection only, on purpose.** The notification arrives as **raw SES event JSON**, not a formatted message — there is no Lambda parsing it into something friendlier. Nothing retries the send, re-opens or re-alerts the incident, or suppresses an address that bounces repeatedly. The goal was to turn "a bad alert address is invisible" into "a bad alert address puts something ugly in your inbox", and raw JSON is a sufficient signal for that. Formatting and remediation are separate features, deliberately not built here rather than overlooked.
-
-### Dashboard
-
-`lambda/api/handler.py` serves two routes from one function, returning every site's current status, 24-hour uptime percentage, and its five most recent incidents in a single JSON document — the exact shape is documented in a comment at the top of that file:
-
-| Route | Auth | Sites returned | Page |
-|---|---|---|---|
-| `GET /status` | Cognito JWT (API Gateway authorizer) | all of them | `/` |
-| `GET /status/{siteId}` | Cognito JWT | one, with full detail | `/monitor` |
-
-The list route carries a top-level `summary` object (up/down/paused counts, weighted 24h uptime, MTBF, time since the last incident, incidents in the last 24h) and a 24-slot `hourlyBuckets` array per site. Both are computed from data the response was already assembling — the buckets come out of the same 24h `UptimeChecks` query the uptime percentage uses, so adding them cost no extra reads.
-
-Each bucket is one of four states, and the distinction between the first two is the point:
-
-| State | Colour | Means |
+| Route | Sites returned | Page |
 |---|---|---|
-| `down` | red | this hour holds a check that was part of a run of `failureThreshold` or more consecutive failures — an incident by the same rule the checker uses to open an `Incidents` row and alert |
-| `warn` | amber | a check failed this hour, but no failing run reached the threshold — an isolated blip that resolved itself |
-| `up` | green | checks ran and all of them passed |
-| `none` | grey | no check recorded this hour (paused, or the site did not exist yet) |
+| `GET /status` | all of them | `/` |
+| `GET /status/{siteId}` | one, with full detail | `/monitor` |
 
-Colouring *any* failure red made red mean "a blip happened", which is not what the rest of the system means by an incident, and gave an operator no way to tell a one-minute wobble from a twenty-minute outage. A run is marked from its **first** failure once it reaches the threshold, not from the check that crossed it, so the red span is the true length of the outage — note this means the bar can show red slightly earlier than the matching `Incidents` row's `startedAt`, which records the moment of confirmation. See `incident_level_checks()` in `lambda/api/handler.py` for the algorithm and its one known edge case (a run that began before the 24h window).
+Both sit behind the Cognito JWT authorizer. The list route carries a top-level `summary` (up/down/paused counts, weighted 24h uptime, MTBF, time since last incident, incidents in 24h) and a 24-slot `hourlyBuckets` array per site, all computed from the same 24h `UptimeChecks` query the uptime percentage already needed.
 
-This is display only. `uptime24h` is still the plain share of individual checks that succeeded; an amber hour lowers it exactly as much as it always did.
+| Bucket state | Colour | Means |
+|---|---|---|
+| `down` | red | a check in a run of `failureThreshold`+ consecutive failures — an incident by the checker's own rule |
+| `warn` | amber | a check failed, but no failing run reached the threshold — an isolated blip |
+| `up` | green | checks ran and all passed |
+| `none` | grey | no check this hour (paused, or the site did not exist yet) |
 
-The detail route adds the raw 24h check series for the response-time graph, thinned by regular-interval sampling to at most 500 points (never truncated — truncation would quietly turn a 24-hour graph into an 8-hour one), plus up to 50 incidents instead of the list view's 5.
+Colouring *any* failure red made red mean "a blip happened", which is not what the rest of the system means by an incident. A run is marked from its **first** failure once it reaches the threshold, so the red span is the true outage length — which means the bar can go red slightly before the matching `Incidents` row's `startedAt`, that being the moment of confirmation. See `incident_level_checks()` for the algorithm and its one edge case (a run beginning before the 24h window). This is display only; `uptime24h` remains the plain share of checks that succeeded.
 
-A site with `enabled: false` now reports `status: "paused"` rather than whatever `CurrentStatus` last recorded. Previously a paused site kept showing its last known status and was counted as operational in the header — that miscount is what `pausedCount` and the `paused` status fix.
+The detail route adds the raw 24h check series for the response-time graph — thinned by regular-interval sampling to at most 500 points, never truncated — plus up to 50 incidents.
 
-`lambda/admin/handler.py` is a **separate** function behind the same JWT authorizer, serving the admin panel:
+A site with `enabled: false` reports `status: "paused"` rather than its last recorded status, and is excluded from the uptime roll-up.
+
+### Admin API
+
+`lambda/admin/handler.py` is a **separate** function behind the same authorizer.
 
 | Route | Minimum role | What it does |
 |---|---|---|
 | `GET /admin/sites` | Editor | every site, admin view |
 | `POST /admin/sites` | Editor | create a site (starts disabled) |
+| `POST /admin/sites/preview` | Editor | suggest a monitor name by reading a URL's page title |
 | `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `brand`, `checkIntervalSec`, `enabled` |
 | `DELETE /admin/sites/{siteId}` | **Admin** | delete the Sites row |
 | `GET /admin/users` | **Admin** | list users and their role |
 | `POST /admin/users` | **Admin** | create a user in a role |
-| `PATCH /admin/users/{username}` | **Admin** | change a user's role, enable/disable them |
+| `PATCH /admin/users/{username}` | **Admin** | change role, enable/disable |
 | `DELETE /admin/users/{username}` | **Admin** | delete a user |
 
-Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` gets its own IAM role, read/write on **Sites only** — not UptimeChecks, CurrentStatus or Incidents — plus eight `cognito-idp` actions scoped to this user pool's ARN.
+Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` has its own IAM role — read/write on **Sites only**, plus `cognito-idp` actions scoped to this user pool's ARN.
 
-### Look and feel
+`POST /admin/sites/preview` is the only place in the codebase that makes an outbound request to a caller-supplied address, so it carries a full SSRF defence: `https://` only, every resolved address checked against reserved ranges, the socket pinned to the address that passed (SNI and certificate verification stay on the hostname, which is what defeats DNS rebinding), IPv4-mapped/6to4/Teredo unwrapping, per-socket timeouts plus a whole-request deadline, re-validation of every redirect hop, a hard read cap, and stdlib `html.parser` reading two tags. Every failure — blocked, refused, timed out, 404, no title — returns the same hostname fallback so the endpoint is not an oracle. **Read the SSRF notice at the top of that section before changing anything in it.**
 
-The interface follows a dark design system defined entirely in `frontend/style.css`: surface/border/status tokens as CSS custom properties, Archivo for headings, Inter for body and JetBrains Mono for figures (loaded from Google Fonts, the only font dependency), a shared small-caps label style, a 4px status-coloured left border on cards and rows, and one track-and-thumb switch used everywhere a boolean is edited.
-
-There is **no CSS framework and no JS framework**. The reference designs were produced with Tailwind, petite-vue and Iconify; none of the three is used here. Icons are hand-written inline SVG in `nav.js`, exposed as `MubwemNav.icon(name)` so the toolbar, buttons and stub pages share one set without a second copy of the path data. The only external scripts in the whole frontend are Chart.js (monitor detail) and the Google Fonts stylesheet.
-
-The palette is dark only. A light counterpart was not invented, since the design tokens supplied were dark throughout.
-
-`frontend/` is plain HTML/CSS/JS with no build step; the status pages poll every 20 seconds and render one card per site, down sites first.
-
-### Pages
-
-**URLs carry no `.html`.** The dashboard is served at `/`, a monitor at
-`/monitor?site=<siteId>`, and so on. The S3 objects are still named
-`monitor.html` — nothing was renamed. A CloudFront Function
-(`ExtensionlessUrlFunction`) on the distribution's default behaviour rewrites
-the path on **viewer-request**, before the cache lookup, so `/monitor` fetches
-`/monitor.html` from the origin while the address bar keeps showing `/monitor`.
-
-The rule is deliberately narrow: a URI ending in `/` is left alone
-(`default_root_object` already resolves it), and a URI whose **last path
-segment** contains a dot is treated as a file and passed through untouched, so
-`/style.css` and `/docs/mubwem.drawio.svg` are never rewritten. Testing only
-the last segment is what stops a dot earlier in the path from exempting a real
-page. The query string is never read or written, so `?site=X` rides through
-unchanged.
-
-The rewrite is **one-directional**: it adds `.html`, it never redirects. A
-clean URL works, and an old `/monitor.html` bookmark still works too — it
-already has an extension, so the function passes it straight through to the
-object of that name. Two URLs therefore serve the same page. That is
-harmless here and no canonical redirect was built for it, but note that only
-the clean path is a registered Cognito callback, so a *cold* sign-in from a
-`.html` URL lands on the dashboard rather than returning to that page.
-
-A persistent side navigation (`nav.js`) is shared by every authenticated page. **Team Members** and **Monitors** are shown only to Admins and Editors — display-level routing, enforced server-side as always.
-
-| Page | Who | What |
-|---|---|---|
-| `/` | any signed-in user | A toolbar (search, status, brand, density) over two summary cards and a grid of monitor cards. Each card carries the status badge, the countdown ring, a 24-bar hourly history and the 24h uptime percentage, and links through to the detail page. |
-| `/monitor?site=<siteId>` | any signed-in user | One monitor: the large hourly bar, the four detail stats that used to sit on the card, a Chart.js response-time graph over the last 24h, and up to 50 incidents. Admins and Editors additionally get an **Edit** form that `PATCH`es `/admin/sites/{siteId}`; a Viewer sees no edit control at all, not a disabled one. |
-| `/incidents` | any signed-in user | Flat cross-site incident list, newest first, with a client-side filter by monitor. |
-| `/sites` | Admins, Editors | Monitor management: the enable toggle and (Admins only) delete. Links to the create form. |
-| `/add-monitor` | Admins, Editors | Full-page create form (name, brand, URL, interval, Enabled switch). Posts to the existing `POST /admin/sites`. |
-| `/team` | Admins | User management. An Editor reaching it is told why there is nothing to see. |
-| `/settings` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
-| `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
-
-#### Dashboard controls
-
-The toolbar filters the `/status` document the page is **already** polling: a text search over name, URL and brand; a status segment (All / Up / Down / Paused) whose counts come from the payload's `summary`; one chip per brand; and a card/list density toggle. None of it issues a request, and none of it needed a backend change — which is why there is no `?q=` or `?status=` parameter on any route.
-
-Filtering never re-sorts. The API returns sites down-first then by name, and that ordering survives every filter, which is also why brands are chips rather than grouped sections. The two summary cards keep describing the whole deployment even when a filter is narrowing the grid — they are the deployment roll-up, not a view of what is on screen — and a "Showing 3 of 8 monitors" line makes the filtered subset explicit. The status filter and density are remembered in `localStorage`; the search text and brand are not.
-
-> **Every page is a registered Cognito callback, and that list is manual.**
-> The `AUTHENTICATED_PAGES` tuple in `infrastructure/stacks/mubwem_stack.py`
-> lists the paths the hosted UI may return to, and adding a page means adding
-> it there too — a CDK change, not a frontend one. `add-monitor` was missing
-> from that tuple for a while, which is worth knowing as the shape of the bug:
-> the page is normally reached from **Monitors** with a live session, so it
-> never redirected and the gap stayed invisible; only a *cold* load with no
-> session bounced through the hosted UI and landed on the dashboard instead of
-> coming back. It is registered now, but a new page added without touching
-> that tuple will fail the same quiet way.
-
-`/settings` and `/integrations` are **placeholders, shipped as placeholders**. Neither has a control that changes anything, and both say so on the page. There is nothing behind them to configure yet: alerting is one SES sender and one recipient fixed at deploy time (with an SNS topic behind it as the fallback), and there are no webhooks, API keys or third-party targets. See the [roadmap](#roadmap-later-phases).
-
-Each card carries a small SVG ring counting down to that site's next check. It is drawn from `lastCheckedAt` in the `/status` payload plus `scheduleIntervalSec` (published in the deploy-generated `config.js`, derived from the same `scheduleExpression` that drives EventBridge Scheduler), and it ticks once a second rather than once per 20-second poll so it moves smoothly. It is an **approximation**: the browser gets no live signal from EventBridge, so the ring shows where the next tick should land if the sweep keeps its cadence, not when it will actually fire.
-
-The frontend never has the API URL or the Cognito client details committed to git: the CDK stack generates a `config.js` at deploy time and uploads it alongside the static files.
-
-### Login
-
-`frontend/auth.js` runs the OAuth 2.0 authorization code flow with PKCE against the Cognito hosted UI. The app client is public — a static page cannot keep a secret — so PKCE is what stops an intercepted code from being redeemed by anyone else.
-
-The id token is kept in `sessionStorage`, never `localStorage`, and no refresh token is stored at all. A `localStorage` token survives every tab and outlives the browsing session, which turns any XSS on a page showing real internal hostnames into a durable credential leak; `sessionStorage` dies with the tab. The cost is re-authenticating on a new tab and once an hour when the id token expires, which the hosted UI's own session cookie usually makes invisible.
+`checkIntervalSec` below 60 is rejected with a 400: 60s is EventBridge Scheduler's floor, so a smaller value would be a lie. Existing rows are not migrated, and `scripts/seed_sites.py` does not apply the floor. The field is stored but not yet honoured — every enabled site is swept every minute.
 
 ---
 
-## Tradeoffs (the honest version)
+## Frontend
 
-- **Single region for checking.** Every check runs from `ap-southeast-2` (Sydney). The target audience is Australian, so this measures what those users actually experience. The cost is that a network problem between AWS Sydney and a site looks identical to that site being down — a real multi-region monitor would check from several regions and require a quorum before alerting.
-- **1-minute check interval, now enforced at write time.** One minute is the floor for EventBridge Scheduler. Sub-minute checking would need a different trigger (a Step Functions loop, or a long-running container), which is more moving parts than a free tier test build justifies.
+`frontend/` is plain HTML/CSS/JS: **no framework and no build step**. The status pages poll every 20 seconds. The only external scripts are Chart.js (monitor detail) and the Google Fonts stylesheet; icons are hand-written inline SVG in `nav.js`, exposed as `MubwemNav.icon(name)`.
 
-  This used to be documentation only: `checkIntervalSec` accepted anything from 30s upward, and the checker ignored it entirely — it sweeps every enabled site on every invocation and compares the field against nothing. A site set to 30s was therefore checked once a minute, not twice, and once the dashboard started drawing each card's countdown from the site's own interval, a 30s site ran two ring cycles per real check. That looks like it is working, which is worse than a ring that obviously is not.
+The dark design system lives entirely in `frontend/style.css` — surface/border/status tokens as CSS custom properties, Archivo for headings, Inter for body, JetBrains Mono for figures, a 4px status-coloured left border on cards, one switch component. Dark only; no light counterpart was invented.
 
-  `POST`/`PATCH /admin/sites` now reject anything below 60 with a 400 explaining why, both site forms carry `min="60"` and an inline note, and `intervalFor()` in `dashboard.js` clamps to 60 so a row written before this rule cannot reproduce the double cycle. **Existing rows are not migrated** — a site already sitting at 30 keeps that value in DynamoDB until someone saves it through the edit form, which will then refuse it until it is corrected. The field is still not *honoured*: every enabled site is checked every minute regardless of what its interval says. Enforcing the floor only stops the value being a lie in the other direction.
+### Pages
 
-  `scripts/seed_sites.py` does not apply this floor — it is the one remaining path that can write a sub-60 value.
-- **On-demand DynamoDB billing.** At a handful of sites and one check per minute, the write volume is trivial and on-demand costs cents. Provisioned capacity would be marginally cheaper at steady state but adds capacity planning and autoscaling config for no real benefit at this scale.
-- **A DynamoDB `Scan` on the Sites table each run.** Correct at tens of rows, where every row is needed anyway. At thousands of sites this becomes the first thing to fix — a GSI on `enabled`, or sharded scheduling.
-- **Uptime % is computed on read** from up to 24 hours of check rows. Simple and always accurate, but the API's cost grows with the retention window; a rollup table would be the next step.
-- **Bounce/complaint notifications are raw SES event JSON.** The delivery-failure topic delivers the event exactly as SES emits it — a wall of JSON in the inbox, not a rendered message like the incident alerts. Parsing it into something readable means another Lambda, another asset, another thing to maintain, and the signal is already unambiguous without one: anything landing in that inbox means the alert address needs a human. Detection was the point of that pass; formatting is a separate feature, and so is anything remedial — nothing retries a bounced send, re-alerts the incident, or suppresses an address that keeps bouncing.
-- **Everything is behind the login, with no public view.** There is no unauthenticated route and no shareable status page; a site's status is visible only to a signed-in user. See [Access control](#access-control-fully-authenticated) for what that does and does not protect.
-- **Deleting a site does not delete its history.** `DELETE /admin/sites/{siteId}` removes the Sites row only; UptimeChecks and Incidents rows for that site are left orphaned. They are harmless, checks age out on their own TTL, and cascading a delete across two partition keys is more machinery than this feature earns.
-- **`removalPolicy: DESTROY`** on the tables, the bucket and the Cognito user pool. This is a test build meant to be torn down cleanly, dashboard accounts included. Anything real should use `RETAIN`.
+**URLs carry no `.html`.** A CloudFront Function (`ExtensionlessUrlFunction`) rewrites the path on viewer-request, so `/monitor` fetches `monitor.html` while the address bar keeps the clean URL. The rule is narrow: a URI ending in `/` is left alone, and one whose **last path segment** contains a dot is passed through as a file. The rewrite only ever adds `.html` — an old `/monitor.html` bookmark still works, though only the clean path is a registered Cognito callback.
+
+A persistent side navigation (`nav.js`) is shared by every page. **Monitors** and **Team Members** are shown only to Admins and Editors — presentation, enforced server-side regardless.
+
+| Page | Who | What |
+|---|---|---|
+| `/` | any signed-in user | Toolbar (search, status, brand, density) over two summary cards and a monitor grid. Each card: status badge, countdown ring, 24-bar hourly history, 24h uptime. |
+| `/monitor?site=<siteId>` | any signed-in user | One monitor: large hourly bar, detail stats, a Chart.js 24h response-time graph, up to 50 incidents. Admins and Editors also get an **Edit** form; a Viewer sees no edit control at all, not a disabled one. |
+| `/incidents` | any signed-in user | Cross-site incident list, newest first, filterable by monitor. |
+| `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
+| `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`; Brand autocompletes from brands already in use. |
+| `/team` | Admins | User management. |
+| `/settings` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
+| `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
+
+The dashboard toolbar filters the `/status` document the page is **already** polling — no request, no backend change, and so no `?q=` or `?status=` parameter on any route. Filtering never re-sorts: the API returns sites down-first then by name, and that ordering survives every filter. The summary cards always describe the whole deployment, with a "Showing 3 of 8 monitors" line making the filtered subset explicit. Status filter and density persist in `localStorage`; search text and brand do not.
+
+Each card's countdown ring is drawn from `lastCheckedAt` plus `scheduleIntervalSec` (published in the generated `config.js`) and ticks once a second. It is an **approximation** — the browser gets no live signal from EventBridge.
+
+> **Every page is a registered Cognito callback, and that list is manual.** The
+> `AUTHENTICATED_PAGES` tuple in `infrastructure/stacks/mubwem_stack.py` lists
+> the paths the hosted UI may return to. A new page added without touching that
+> tuple fails quietly: it works when reached with a live session, and only a
+> *cold* load bounces through the hosted UI and lands on the dashboard instead.
+
+`/settings` and `/integrations` are **placeholders, shipped as placeholders**, and say so on the page. There is nothing behind them yet: alerting is one SES sender and one recipient fixed at deploy time, and there are no webhooks, API keys or third-party targets.
+
+### Login
+
+`frontend/auth.js` runs OAuth 2.0 authorization code with PKCE against the Cognito hosted UI. The app client is public — a static page cannot keep a secret — so PKCE is what stops an intercepted code being redeemed by anyone else.
+
+The id token is kept in `sessionStorage`, never `localStorage`, and no refresh token is stored. A `localStorage` token outlives the browsing session, turning any XSS on a page showing internal hostnames into a durable credential leak. The cost is re-authenticating in a new tab and hourly on expiry, which the hosted UI's session cookie usually makes invisible.
+
+The frontend never has the API URL or Cognito client details committed to git — the stack generates `config.js` at deploy time and uploads it with the static files.
 
 ---
 
@@ -228,28 +154,24 @@ Three Cognito **user pool groups**, created by the stack. A user's group arrives
 | Role | Sites | Users | Dashboard |
 |---|---|---|---|
 | **Admins** | create, edit, **delete** | create, change role, enable/disable, delete | yes |
-| **Editors** | create, edit (`name`, `url`, `brand`, `checkIntervalSec`, `enabled`) — **no delete** | no access | yes |
+| **Editors** | create, edit — **no delete** | no access | yes |
 | **Viewers** | no access | no access | yes, read-only |
 
-A Viewer has no access to any `/admin/*` route at all, not even a read-only one. An Editor who needs a site to stop being checked turns its `enabled` toggle off rather than deleting it — deletion has a larger blast radius, so it stays with Admins.
+An Editor who needs a site to stop being checked turns its `enabled` toggle off; deletion has a larger blast radius, so it stays with Admins. Group precedence is `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so multiple memberships resolve predictably.
 
-Group precedence is `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so a user who somehow ends up in more than one group resolves predictably.
+### Where the enforcement is
 
-### Where the enforcement actually is
+The JWT authorizer establishes exactly one thing: the caller holds a valid, unexpired id token from this user pool and app client. **It knows nothing about groups.**
 
-The API Gateway JWT authorizer in front of `/admin/*` establishes exactly one thing: the caller holds a valid, unexpired id token from this user pool and app client. **It knows nothing about groups.**
+Every group decision is made in `lambda/admin/handler.py`, in `_user_groups()` and `_require()`. `_user_groups()` reads `cognito:groups` and returns a `set`, handling the several shapes API Gateway can deliver that claim in. Anything it does not understand — missing, malformed, empty, an unexpected event shape, an exception anywhere — returns the **empty set**, which intersects nothing, so `_require()` answers 403. There is no path through that file where failing to determine the caller's groups grants access. Every route handler calls `_require()` first.
 
-Every group decision is made inside `lambda/admin/handler.py`, in `_user_groups()` and `_require()`. `_user_groups()` reads `cognito:groups` from the authorizer claims and returns a `set`, handling the several shapes API Gateway can deliver that claim in (a list, a comma-separated string, a bracketed string). Anything it does not understand — the claim missing, malformed, empty, the event shaped unexpectedly, an exception anywhere in the lookup — returns the **empty set**, and an empty set intersects nothing, so `_require()` answers 403. There is no path through that file where failing to determine the caller's groups results in access being granted.
+The frontend decodes the same claim to decide which controls to draw. That is **presentation, not security** — the backend refuses regardless; its only job is to avoid offering someone a button that will fail.
 
-Every route handler calls `_require()` first and returns immediately if it gets a response back.
-
-`frontend/admin.js` decodes the same claim client-side to decide which controls to draw — hiding the user-management section from Editors, not rendering delete buttons for non-Admins, bouncing a Viewer back to `/`. That is **presentation, not security**. The token is in the browser and under the user's control; if that file drew every control for everyone, the backend would still refuse. Its only job is to avoid offering someone a button that is going to fail.
+Two self-inflicted lockouts are blocked, both with a 409: an admin cannot disable or delete their own account (`_is_self()` compares against the caller's `sub`, `cognito:username` and `email` claims), and cannot demote themselves out of `Admins` if `_is_last_admin()` says they are the last one.
 
 ### Bootstrapping the first admin
 
-**Read this before you get stuck on it.** Groups can only be assigned through the admin panel, and reaching the admin panel requires already being in `Admins`. The very first user therefore has no group, because at the time they were created nothing existed to assign one through — and no admin existed to grant it.
-
-That one assignment is a manual CLI step, and there is no way around it:
+Groups can only be assigned through the admin panel, and reaching it requires already being in `Admins`. The first user therefore has no group, and one manual CLI call is unavoidable:
 
 ```bash
 aws cognito-idp admin-add-user-to-group \
@@ -259,32 +181,17 @@ aws cognito-idp admin-add-user-to-group \
   --region ap-southeast-2
 ```
 
-Then sign out and back in — the group lands in a **new** id token, not the one already in `sessionStorage`. After that, every further user is created and assigned a role from **Team Members** at `<DashboardUrl>/team`.
+Then sign out and back in — the group lands in a **new** id token, not the one already in `sessionStorage`. Every user after that is created and assigned a role from **Team Members** at `<DashboardUrl>/team`.
 
-If you ever delete every Admin, you are back to this step. That is why an admin cannot delete or disable their own account through the panel: `_is_self()` compares the target against the caller's own `sub`, `cognito:username` and `email` claims and refuses a match with a 409.
+### What authentication does not cover
 
----
+- **CloudFront itself is not access-controlled.** The static HTML, CSS and JS are downloadable by anyone with the URL. Nothing sensitive is in them — sites, statuses and incidents all arrive from the authenticated API — but `config.js` publishes the API URL, Cognito domain and public client id. That is by design for a public OAuth client.
+- **CORS is `*`.** The authorizer, not the origin header, protects every route. It stays open so the frontend can run from `localhost` against a deployed API without a redeploy.
+- **No MFA, and no logging of who looked at what.**
+- **`removalPolicy: DESTROY`** on the tables, the bucket and the user pool. `cdk destroy` takes the dashboard accounts with it. Anything real should use `RETAIN`.
+- **Deleting a site does not delete its history.** UptimeChecks and Incidents rows are left orphaned; checks age out on their own TTL.
 
-## Access control: fully authenticated
-
-This started as a known Phase 1 gap — the dashboard URL and `/status` were both reachable by anyone holding the URL, with no authentication — identified during Phase 1 testing rather than discovered later. It is now closed as follows.
-
-**The dashboard is login-gated.** A Cognito user pool with **self-signup disabled** fronts it: accounts exist only because an operator created them (see [Creating a user](#creating-a-user)). Login goes through the Cognito hosted UI, and every route sits behind an API Gateway JWT authorizer validating the id token against that pool and app client.
-
-**There is no public or unauthenticated access anywhere in the system.** Every route on the HTTP API — both `/status` routes and all eight `/admin/*` routes — carries the JWT authorizer; none is reachable without a token, and there is no shareable status page. A per-site `isPublic` opt-in and an open `GET /public/status` route existed in an earlier build and were removed; nothing reads that flag any more.
-
-Of the three fixes weighed earlier, this is the third — real authentication rather than a shared credential:
-
-1. **A CloudFront Function doing HTTP Basic Auth at the edge** was the fastest to add and the weakest as access control: one shared credential, sent on every request, with no per-user identity or revocation. Not used.
-2. **AWS WAF with an IP allowlist in front of CloudFront** is stronger where access should be limited to known office or VPN ranges, but needs a second stack in `us-east-1` — a WAF web ACL attached to CloudFront must live there regardless of which region the distribution is configured from. Not used; still the right addition if you want network-level restriction *as well*.
-3. **Identity-based auth** — the option taken. Cognito gives per-user identity, revocation (disable or delete the user) and password policy, and the same JWT authorizer swaps to an organizational IdP later: federate the user pool to your SSO provider and neither the API nor the frontend changes.
-
-### What this still does not do
-
-- **CloudFront itself is not access-controlled.** The static HTML, CSS and JS are downloadable by anyone with the URL. There is nothing sensitive in them — the site list, statuses and incidents all arrive from the authenticated API — but the distribution is not private, and `config.js` publishes the API URL, the Cognito domain and the public client id. That is by design for a public OAuth client, not an oversight.
-- **CORS on the API is still `*`.** The JWT authorizer, not the origin header, is what protects every route; CORS was never doing that job. It stays open so the frontend can be run from `localhost` against a deployed API without a redeploy.
-- **No MFA, and no logging of who looked at what.** Adequate for a portfolio build, not for anything with a compliance story.
-- **`removalPolicy: DESTROY` covers the user pool too**, so `cdk destroy` takes the accounts with it.
+An earlier build had a per-site `isPublic` flag and an open `GET /public/status` route. Both were removed; nothing reads that flag any more.
 
 ---
 
@@ -292,7 +199,7 @@ Of the three fixes weighed earlier, this is the third — real authentication ra
 
 ### Prerequisites
 
-- An AWS account and credentials configured (`aws configure`, or `AWS_PROFILE`)
+- An AWS account and credentials (`aws configure`, or `AWS_PROFILE`)
 - Node.js (for the CDK CLI) and Python 3.11+
 - `npm install -g aws-cdk`
 
@@ -307,7 +214,7 @@ pip install -r scripts/requirements.txt
 
 ### 2. Set your configuration
 
-Nothing environment-specific is committed. Copy the env template and fill it in:
+Nothing environment-specific is committed. Copy the template and fill it in:
 
 ```bash
 cp .env.example .env               # .env is gitignored
@@ -322,13 +229,15 @@ cp .env.example .env               # .env is gitignored
 | HTTP timeout (sec) | `MUBWEM_CHECK_TIMEOUT_SEC` | `checkTimeoutSec` | `8` |
 | Check retention (days) | `MUBWEM_CHECKS_TTL_DAYS` | `checksTtlDays` | `30` |
 | Schedule | `MUBWEM_SCHEDULE_EXPRESSION` | `scheduleExpression` | `rate(1 minute)` |
+| Schedule timezone | `MUBWEM_SCHEDULE_TIMEZONE` | `scheduleTimezone` | `Australia/Sydney` |
 | Region | `MUBWEM_REGION` | `region` | `ap-southeast-2` |
+| Account | `MUBWEM_ACCOUNT` | `account` | `CDK_DEFAULT_ACCOUNT` |
 | Cognito domain prefix | — | `cognitoDomainPrefix` | derived from the stack id |
 | Check countdown (sec) | — | `scheduleIntervalSec` | derived from `scheduleExpression` |
 
-The Cognito hosted-UI domain prefix has to be globally unique across all AWS accounts, so it defaults to `mubwem-` plus the first segment of this stack's CloudFormation id. Override it with `-c cognitoDomainPrefix=something-unique` if you want a friendlier login URL.
+The hosted-UI domain prefix must be globally unique across all AWS accounts, so it defaults to `mubwem-` plus the first segment of this stack's CloudFormation id. Override with `-c cognitoDomainPrefix=something-unique` for a friendlier login URL.
 
-Any of these can also be passed on the command line, which wins over both `.env` and `cdk.json`:
+Command-line context wins over both `.env` and `cdk.json`:
 
 ```bash
 cdk deploy -c alertEmail=you@yourdomain.com -c failureThreshold=3
@@ -343,7 +252,7 @@ cdk synth                          # sanity check, writes nothing to AWS
 cdk deploy
 ```
 
-Deploy prints nine outputs:
+Deploy prints ten outputs:
 
 | Output | What it is for |
 |---|---|
@@ -351,26 +260,26 @@ Deploy prints nine outputs:
 | `SitesAdminUrl` | monitor management — Admins and Editors |
 | `TeamAdminUrl` | user management — Admins |
 | `ApiUrl` | `GET /status` — needs a Cognito id token |
-| `AdminApiUrl` | base path for `/admin/users` and `/admin/sites` — needs a token *and* the right group |
+| `AdminApiUrl` | base path for `/admin/*` — needs a token *and* the right group |
 | `CognitoLoginUrl` | the hosted UI login page |
-| `CognitoUserPoolId` | needed to create the first user, and to put them in `Admins` (below) |
+| `CognitoUserPoolId` | needed to create the first user and put them in `Admins` |
 | `SitesTableName` | used by `scripts/seed_sites.py` |
-| `AlertTopicArn` | the SNS topic used as the plain-text alert fallback |
-| `DeliveryFailureTopicArn` | the SNS topic SES reports alert bounces and complaints to |
+| `AlertTopicArn` | SNS topic used as the plain-text alert fallback |
+| `DeliveryFailureTopicArn` | SNS topic SES reports bounces and complaints to |
 
 ### 4. Verify the email addresses
 
-The deploy sends **three** mails to the address you configured. Click all three; check spam if they do not arrive within a minute.
+The deploy sends **three** mails to the configured address. Click all three; check spam.
 
-1. **"Amazon Web Services – Email Address Verification Request"** — SES. Until this is verified, SES refuses to send and every alert arrives as the plain-text SNS fallback instead of the HTML mail.
-2. **"AWS Notification – Subscription Confirmation"** — SNS, for `AlertTopicArn`. This is the fallback path; without it a failed SES send has nowhere to go.
-3. **"AWS Notification – Subscription Confirmation"** — SNS again, for `DeliveryFailureTopicArn`. This is the bounce/complaint path. The two confirmation mails look identical; the topic ARN in the body is what tells them apart, and you need both.
+1. **"Amazon Web Services – Email Address Verification Request"** — SES. Until verified, SES refuses to send and every alert arrives as the plain-text SNS fallback.
+2. **"AWS Notification – Subscription Confirmation"** — SNS, for `AlertTopicArn` (the fallback path).
+3. **"AWS Notification – Subscription Confirmation"** — SNS again, for `DeliveryFailureTopicArn` (the bounce path). The two look identical; the topic ARN in the body tells them apart, and you need both.
 
-If `senderEmail` differs from `alertEmail`, both addresses get a SES verification mail and both need verifying. If `bounceAlertEmail` is set to a third address, the confirmation in (3) goes there instead.
+If `senderEmail` differs from `alertEmail`, both need SES verification. If `bounceAlertEmail` is a third address, mail (3) goes there.
 
-> **SES sandbox.** A new AWS account starts in the SES sandbox, where mail can only be sent *to* verified addresses. That is fine here — there is one recipient — which is why `senderEmail` defaults to `alertEmail`: one verified address covers both ends. Ask AWS for production access only if you later want to alert an address you cannot verify.
+> **SES sandbox.** A new account can only send *to* verified addresses. That is fine with one recipient, which is why `senderEmail` defaults to `alertEmail` — one verified address covers both ends. Request production access only if you later need to alert an address you cannot verify.
 
-### 5. Seed your sites
+### 5. Seed your sites (optional)
 
 ```bash
 cp config/config.example.json config/config.json     # config.json is gitignored
@@ -379,26 +288,22 @@ python scripts/seed_sites.py --dry-run              # check what will be written
 python scripts/seed_sites.py                        # write to the Sites table
 ```
 
-The script finds the table name from the stack's `SitesTableName` output, so no table name or ARN is ever hardcoded. Re-running it updates existing sites while preserving their original `createdAt`; `--prune` also deletes sites that are no longer in the config.
+The script resolves the table from the stack's `SitesTableName` output, so no table name or ARN is hardcoded. Re-running updates existing sites while preserving `createdAt`; `--prune` also deletes sites no longer in the config. The checker picks up new sites within a minute.
 
-The checker picks up the new sites on its next run, within a minute.
-
-Seeding is now optional: once you have an Admin (see [Bootstrapping the first admin](#bootstrapping-the-first-admin)), sites are added and edited from the **Monitors** page instead. `seed_sites.py` remains the way to load a list in bulk, and to keep a config file as the source of truth.
+Once you have an Admin, sites are normally added from the **Monitors** page instead. `seed_sites.py` remains the way to load a list in bulk or keep a config file as the source of truth.
 
 ### 6. Open the dashboard
 
-Visit the `DashboardUrl` output and sign in with a user you created (see [Creating a user](#creating-a-user) — there is no self-signup, so do this first). CloudFront can take a few minutes to finish deploying on first launch.
+Visit `DashboardUrl` and sign in with a user you created (see [Creating a user](#creating-a-user) — there is no self-signup, so do that first). CloudFront can take a few minutes on first deploy.
 
-Monitor management is `<DashboardUrl>/sites` and user management is `<DashboardUrl>/team` (both printed as stack outputs). They appear in the side navigation for anyone whose token carries `Admins` or `Editors`; a Viewer never sees the links, and is redirected to the dashboard if they navigate there anyway.
-
-Running the frontend locally means signing in locally, because every page now needs a token:
+Running the frontend locally still requires signing in:
 
 ```bash
 cd frontend && python -m http.server 8000
 # then open http://localhost:8000/?api=<ApiUrl output>
 ```
 
-For that to work, add `http://localhost:8000/` to the app client's callback **and** sign-out URLs in the Cognito console — or to `callback_urls` / `logout_urls` in the stack, if you would rather it be code. The API's CORS policy already allows any origin, so no API change is needed.
+Add `http://localhost:8000/` to the app client's callback **and** sign-out URLs in the Cognito console, or to `callback_urls` / `logout_urls` in the stack. CORS already allows any origin, so no API change is needed.
 
 ### Tearing down
 
@@ -406,18 +311,15 @@ For that to work, add `http://localhost:8000/` to the app client's callback **an
 cd infrastructure && cdk destroy
 ```
 
-Tables, the frontend bucket and the user pool are set to `DESTROY`, so this leaves nothing behind — including the dashboard accounts.
+Tables, the frontend bucket and the user pool are set to `DESTROY`, so nothing is left behind — dashboard accounts included.
 
 ---
 
 ## Creating a user
 
-**The admin panel is the normal path.** Once there is at least one Admin, users are created and given a role on the **Team Members** page at `<DashboardUrl>/team` — email plus a role dropdown, no CLI. Cognito emails the new user a temporary password (generated server-side in `lambda/admin/handler.py`, never accepted from the browser) and they set a real one on first hosted-UI login.
+**The admin panel is the normal path.** Once at least one Admin exists, users are created and given a role on **Team Members** at `<DashboardUrl>/team`. Cognito emails a temporary password (generated server-side, never accepted from the browser) and the user sets a real one on first hosted-UI login.
 
-The CLI below is **bootstrap only**: it is how the very first account comes into existence, before an admin panel is reachable by anyone. Self-signup is deliberately off, so nobody gets a dashboard account except by an operator creating one.
-
-### Bootstrap: the first user
-
+The CLI below is **bootstrap only** — how the first account comes into existence before any admin panel is reachable. Self-signup is deliberately off.
 
 ```bash
 aws cognito-idp admin-create-user \
@@ -428,15 +330,11 @@ aws cognito-idp admin-create-user \
   --region ap-southeast-2
 ```
 
-Cognito emails the temporary password to that address. On the first hosted-UI login the user is prompted to set a permanent one, which must satisfy the pool's policy: at least 8 characters with an uppercase letter, a lowercase letter and a digit.
+Passwords must be at least 8 characters with an uppercase letter, a lowercase letter and a digit. Add `--message-action SUPPRESS` to hand the temporary password over yourself instead of having Cognito email it.
 
-Add `--message-action SUPPRESS` if you would rather hand the temporary password over yourself instead of having Cognito email it.
+That user exists but is in **no group**, so they can sign in and see nothing else. Put them in `Admins` with the step in [Bootstrapping the first admin](#bootstrapping-the-first-admin).
 
-That user now exists but is in **no group**, so they can sign in to the dashboard and see nothing else. Put them in `Admins` with the one-off step in [Bootstrapping the first admin](#bootstrapping-the-first-admin) — that CLI call cannot be done through the UI, because no admin exists yet to grant it. Every user after this one goes through the admin panel.
-
-### Revoking access
-
-Disable or delete the user from the **Team Members** table. Or, from the CLI:
+**Revoking access:** disable or delete the user from the **Team Members** table, or:
 
 ```bash
 aws cognito-idp admin-disable-user --user-pool-id <id> --username you@example.com --region ap-southeast-2
@@ -454,8 +352,10 @@ mubwem/
 │   ├── cdk.json            context block with placeholder values
 │   └── requirements.txt
 ├── lambda/
-│   ├── checker/handler.py  runs every minute, checks all sites, alerts
-│   ├── api/handler.py      the four /status routes, list and detail
+│   ├── checker/
+│   │   ├── handler.py      runs every minute, checks all sites, alerts
+│   │   └── email_templates.py   HTML + plain-text DOWN / RESOLVED mails
+│   ├── api/handler.py      the two /status routes, list and detail
 │   └── admin/handler.py    /admin/* — group checks, site CRUD, user management
 ├── frontend/               static pages (no framework, no build step)
 │   ├── index.html          dashboard: summary cards + monitor grid
@@ -467,13 +367,15 @@ mubwem/
 │   ├── settings.html       stub: read-only deploy config
 │   ├── integrations.html   stub: API URLs, no integrations
 │   ├── auth.js             Cognito hosted UI login (auth code + PKCE)
-│   ├── nav.js              the shared side navigation
+│   ├── nav.js              shared side navigation and inline SVG icons
 │   ├── shell.js            per-page bootstrap: auth, nav, fetch, formatting
-│   ├── dashboard.js        monitor-card rendering for the dashboard
+│   ├── dashboard.js        monitor-card rendering
+│   ├── style.css           the whole design system
 │   └── *.js                one bootstrap module per page
 ├── config/
 │   ├── config.example.json committed placeholders
 │   └── config.json         gitignored — your real sites
+├── docs/                   architecture diagram (draw.io source + SVG)
 ├── scripts/seed_sites.py   seeds the Sites table from config.json
 └── LICENSE                 MIT
 ```
@@ -482,11 +384,10 @@ mubwem/
 
 - Multi-region checks with quorum before alerting
 - Historical uptime rollups instead of computing 24h uptime on every read
-- SSL certificate expiry and keyword-match checks
-- Per-site alert routing (Slack, SMS) and maintenance windows
-- Federating the Cognito pool to organizational SSO, and WAF/IP restriction in front of CloudFront
 - Honouring per-site `checkIntervalSec` instead of a fixed one-minute sweep
+- SSL certificate expiry and keyword-match checks
+- Per-site alert routing (Slack, SMS), maintenance windows and per-site thresholds — everything `/settings` currently stands in for
+- Webhooks, third-party targets, API keys and a published OpenAPI description — everything `/integrations` currently stands in for
+- A real incident history. `/incidents` is assembled from the dashboard feed, which carries only the 5 most recent incidents per monitor, so it shows recent history rather than a complete log. A full view needs a paginated cross-site query over a table that only grows.
+- Federating the Cognito pool to organizational SSO, and WAF/IP restriction in front of CloudFront
 - An audit log of admin actions — who changed which site or role, and when
-- **Settings (`/settings`) is a stub.** Per-user notification preferences, alert routing beyond the single email recipient, maintenance windows and per-site failure thresholds are all unbuilt. The page shows deploy-time config read-only and says so.
-- **Integrations & API (`/integrations`) is a stub.** No webhooks, no Slack/Teams/PagerDuty targets, no API keys, no published OpenAPI description. The page documents the existing routes and says so.
-- **A real incident history.** `/incidents` is assembled from the dashboard feed, which carries only the 5 most recent incidents per monitor — so it shows recent history, not a complete log. A full view needs a paginated cross-site query over the Incidents table, which is a genuine feature (unbounded reads over a table that only grows), not a tweak to that page.

@@ -30,6 +30,7 @@ import os
 import re
 
 from aws_cdk import (
+    ArnFormat,
     Aws,
     CfnOutput,
     Duration,
@@ -287,13 +288,29 @@ class MubwemStack(Stack):
         incidents_table.grant_read_write_data(checker_fn)
         alert_topic.grant_publish(checker_fn)
 
-        # Scoped to the From identity: SES authorises a send against the
-        # identity the mail claims to come from, so that is the only resource
-        # this function needs.
+        # One SendEmail call, two resources to authorise. SES evaluates the
+        # request against every resource it names: the identity the mail claims
+        # to come from, and - because the checker passes ConfigurationSetName -
+        # the configuration set it is sent through. Granting only the identity
+        # gets an AccessDenied naming the configuration set, which is what
+        # happened when ConfigurationSetName was added without touching this.
+        #
+        # Both go in one statement rather than two: same action, same effect,
+        # and a single list is harder to extend by half. Anything else the send
+        # starts naming later - a dedicated IP pool, a MAIL FROM identity -
+        # belongs in this list too.
         checker_fn.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["ses:SendEmail"],
-                resources=[sender_identity.email_identity_arn],
+                resources=[
+                    sender_identity.email_identity_arn,
+                    self.format_arn(
+                        service="ses",
+                        resource="configuration-set",
+                        resource_name=alert_config_set.configuration_set_name,
+                        arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+                    ),
+                ],
             )
         )
 

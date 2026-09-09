@@ -23,6 +23,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ENV_OVERRIDES = {
     "MUBWEM_ALERT_EMAIL": "alertEmail",
     "MUBWEM_SENDER_EMAIL": "senderEmail",
+    "MUBWEM_BOUNCE_ALERT_EMAIL": "bounceAlertEmail",
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",
     "MUBWEM_CHECK_TIMEOUT_SEC": "checkTimeoutSec",
     "MUBWEM_CHECKS_TTL_DAYS": "checksTtlDays",

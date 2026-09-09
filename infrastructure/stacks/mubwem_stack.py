@@ -5,6 +5,7 @@ Single CDK stack containing the whole Phase 1 (free tier) system:
   EventBridge Scheduler (1 min) -> Checker Lambda -> DynamoDB (4 tables)
                                          |
                                          +-> SES -> HTML alert email
+                                         |    +-> bounce/complaint -> SNS topic
                                          +-> SNS topic (fallback, plain text)
 
   CloudFront -> S3 (static dashboard), which fetches
@@ -98,6 +99,14 @@ class MubwemStack(Stack):
         if not sender_email or "CHANGE_ME" in str(sender_email):
             sender_email = alert_email
 
+        # Where SES bounce/complaint notifications land. Same address as the
+        # incident alerts by default - it is the same person's problem - but
+        # separable, because raw delivery-failure JSON is a different audience
+        # from "your site is down" once someone else is on call.
+        bounce_alert_email = self.node.try_get_context("bounceAlertEmail")
+        if not bounce_alert_email or "CHANGE_ME" in str(bounce_alert_email):
+            bounce_alert_email = alert_email
+
         failure_threshold = int(self.node.try_get_context("failureThreshold") or 3)
         check_timeout_sec = int(self.node.try_get_context("checkTimeoutSec") or 8)
         checks_ttl_days = int(self.node.try_get_context("checksTtlDays") or 30)
@@ -179,10 +188,58 @@ class MubwemStack(Stack):
         # Creating the identity only asks AWS to send the verification mail.
         # Nobody is verified until someone clicks the link in it.
         # ------------------------------------------------------------------
+        # Delivery failures are asynchronous: SES returns a MessageId as soon
+        # as it accepts a mail, so a send to a valid-looking but undeliverable
+        # address "succeeds" and hard-bounces minutes later. Nothing in the
+        # checker can see that. The configuration set below is what makes it
+        # visible - it tags outgoing mail so SES has somewhere to report the
+        # bounce to.
+        #
+        # This is detection only. Nothing retries, re-alerts, or suppresses a
+        # bouncing address; the notification is raw SES event JSON and its job
+        # is purely to make a human look.
+        bounce_topic = sns.Topic(
+            self,
+            "DeliveryFailureTopic",
+            display_name="MuBWeM Alert Delivery Failures",
+        )
+
+        alert_config_set = ses.ConfigurationSet(self, "AlertConfigurationSet")
+
+        # SES publishes as a service principal, so the topic needs a resource
+        # policy to accept it. add_event_destination writes that policy itself,
+        # already scoped both ways - aws:SourceAccount to this account (the
+        # confused-deputy guard, without which any account's SES could publish
+        # here) and aws:SourceArn to this one configuration set rather than all
+        # SES activity in the account. Adding a second statement by hand only
+        # duplicated it, so this relies on the generated one; the shape it
+        # produces is worth re-checking in `cdk synth` after a CDK upgrade.
+        #
+        # BOUNCE and COMPLAINT only. DELIVERY would fire on every successful
+        # send - an inbox that mails itself every minute is one nobody reads.
+        # The same call also emits DependsOn from the destination to that topic
+        # policy, which matters: SES validates it can publish when the
+        # destination is created.
+        alert_config_set.add_event_destination(
+            "DeliveryFailureDestination",
+            destination=ses.EventDestination.sns_topic(bounce_topic),
+            events=[
+                ses.EmailSendingEvent.BOUNCE,
+                ses.EmailSendingEvent.COMPLAINT,
+            ],
+        )
+
+        bounce_topic.add_subscription(sns_subs.EmailSubscription(bounce_alert_email))
+
+        # Attaching the configuration set to the identity makes it the default
+        # for anything sent from this address. The checker also names it
+        # explicitly on each send; either alone would work, and both together
+        # mean a mail cannot slip out untracked.
         sender_identity = ses.EmailIdentity(
             self,
             "AlertSenderIdentity",
             identity=ses.Identity.email(sender_email),
+            configuration_set=alert_config_set,
         )
         if sender_email != alert_email:
             # In the SES sandbox the recipient needs verifying too; when the
@@ -216,6 +273,7 @@ class MubwemStack(Stack):
                 "ALERT_TOPIC_ARN": alert_topic.topic_arn,
                 "ALERT_EMAIL": alert_email,
                 "SENDER_EMAIL": sender_email,
+                "SES_CONFIGURATION_SET": alert_config_set.configuration_set_name,
                 "FAILURE_THRESHOLD": str(failure_threshold),
                 "CHECK_TIMEOUT_SEC": str(check_timeout_sec),
                 "CHECKS_TTL_DAYS": str(checks_ttl_days),
@@ -664,6 +722,12 @@ class MubwemStack(Stack):
         CfnOutput(self, "TeamAdminUrl", value=dashboard_url + "/team.html")
         CfnOutput(self, "SitesTableName", value=sites_table.table_name)
         CfnOutput(self, "AlertTopicArn", value=alert_topic.topic_arn)
+        CfnOutput(
+            self,
+            "DeliveryFailureTopicArn",
+            value=bounce_topic.topic_arn,
+            description="SES bounce/complaint notifications for alert email",
+        )
         CfnOutput(
             self,
             "CognitoLoginUrl",

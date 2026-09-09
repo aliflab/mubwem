@@ -11,7 +11,9 @@ Runs once a minute from EventBridge Scheduler. For every enabled site it:
 
 Alerts go out through SES as a designed HTML mail (see email_templates.py),
 with the SNS topic kept as the fallback for when SES will not send - an
-unverified identity or a throttle must not cost an alert.
+unverified identity or a throttle must not cost an alert. Bounces and
+complaints cannot be seen from here at all; they are reported asynchronously
+to a separate SNS topic via the SES configuration set.
 
 Only the stdlib and boto3 are used, so the function needs no bundled deps.
 """
@@ -56,6 +58,10 @@ CHECK_REGION = os.environ.get("CHECK_REGION", "unknown")
 # is missing the mail simply carries no "View details" button.
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "") or ALERT_EMAIL
+# Tags outgoing mail so SES reports bounces and complaints to the topic the
+# stack wired up. Purely for reporting - it changes nothing about whether a
+# send succeeds, and an empty value simply sends without it.
+SES_CONFIGURATION_SET = os.environ.get("SES_CONFIGURATION_SET", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
 
 USER_AGENT = "MuBWeM-Monitor/1.0 (+uptime check)"
@@ -306,20 +312,28 @@ def send_alert(subject, text_body, html_body):
 
     Both paths swallow their errors: an undeliverable alert is bad, a sweep
     that dies mid-flight because of one is worse.
+
+    A return here means SES accepted the mail, not that it arrived - a bounce
+    lands minutes later and is invisible from inside this function. That gap is
+    covered outside it, by the configuration set reporting bounces and
+    complaints to their own SNS topic.
     """
     if SENDER_EMAIL and ALERT_EMAIL:
-        try:
-            _ses.send_email(
-                Source=SENDER_EMAIL,
-                Destination={"ToAddresses": [ALERT_EMAIL]},
-                Message={
-                    "Subject": {"Data": subject[:255], "Charset": "UTF-8"},
-                    "Body": {
-                        "Text": {"Data": text_body, "Charset": "UTF-8"},
-                        "Html": {"Data": html_body, "Charset": "UTF-8"},
-                    },
+        kwargs = {
+            "Source": SENDER_EMAIL,
+            "Destination": {"ToAddresses": [ALERT_EMAIL]},
+            "Message": {
+                "Subject": {"Data": subject[:255], "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": text_body, "Charset": "UTF-8"},
+                    "Html": {"Data": html_body, "Charset": "UTF-8"},
                 },
-            )
+            },
+        }
+        if SES_CONFIGURATION_SET:
+            kwargs["ConfigurationSetName"] = SES_CONFIGURATION_SET
+        try:
+            _ses.send_email(**kwargs)
             return
         except ClientError:
             # Almost always an unverified identity or a sending cap. Fall

@@ -15,6 +15,7 @@
 
     "alertEmail": "CHANGE_ME@example.com",
     "senderEmail": "CHANGE_ME@example.com",
+    "bounceAlertEmail": "CHANGE_ME@example.com",
     "failureThreshold": 3,
     "checkTimeoutSec": 8,
     "checksTtlDays": 30,

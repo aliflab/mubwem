@@ -110,7 +110,7 @@
 
       var siteCell = text("td", null, null);
       var link = document.createElement("a");
-      link.href = "monitor.html?site=" + encodeURIComponent(incident.siteId);
+      link.href = "/monitor?site=" + encodeURIComponent(incident.siteId);
       link.textContent = incident.siteName;
       siteCell.appendChild(link);
       row.appendChild(siteCell);

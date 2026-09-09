@@ -10,7 +10,7 @@
  *     apiUrl: "https://.../status",
  *     headers: function () { return { Authorization: "Bearer ..." }; },  // optional
  *     onUnauthorized: function () { ... },                              // optional
- *     detailHref: function (siteId) { return "monitor.html?site=" + siteId; }
+ *     detailHref: function (siteId) { return "/monitor?site=" + siteId; }
  *   });
  *
  * detailHref makes each card a link through to its detail page.

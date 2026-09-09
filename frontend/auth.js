@@ -28,7 +28,7 @@ window.MubwemAuth = (function () {
   /* Which registered callback URL this page uses.
 
      Every authenticated page is its own callback, so signing in from
-     /incidents.html returns there rather than dumping the user on the
+     /incidents returns there rather than dumping the user on the
      dashboard. The value has to match a callback URL in the app client
      character for character, which is why the candidates come from the
      deploy-generated config and this only ever *selects* one - it never
@@ -36,7 +36,7 @@ window.MubwemAuth = (function () {
      which is always registered.
 
      Note the query string is deliberately not part of it: Cognito appends its
-     own ?code=, so a page carrying state in the query (monitor.html?site=...)
+     own ?code=, so a page carrying state in the query (/monitor?site=...)
      has to remember that itself. */
   function redirectUri() {
     var here = window.location.origin + (window.location.pathname || "");

@@ -108,15 +108,15 @@ window.MubwemNav = (function () {
   /* Primary navigation, then a visually separated utility group at the foot.
      `groups`, when present, is the set of Cognito groups that see the item. */
   var PRIMARY = [
-    { key: "dashboard", label: "Dashboard", href: "index.html" },
-    { key: "incidents", label: "Incidents", href: "incidents.html", badge: true },
-    { key: "sites", label: "Monitors", href: "sites.html", groups: ["Admins", "Editors"] },
-    { key: "team", label: "Team Members", href: "team.html", groups: ["Admins", "Editors"] }
+    { key: "dashboard", label: "Dashboard", href: "/" },
+    { key: "incidents", label: "Incidents", href: "/incidents", badge: true },
+    { key: "sites", label: "Monitors", href: "/sites", groups: ["Admins", "Editors"] },
+    { key: "team", label: "Team Members", href: "/team", groups: ["Admins", "Editors"] }
   ];
 
   var UTILITY = [
-    { key: "settings", label: "Settings", href: "settings.html" },
-    { key: "integrations", label: "Integrations & API", href: "integrations.html" }
+    { key: "settings", label: "Settings", href: "/settings" },
+    { key: "integrations", label: "Integrations & API", href: "/integrations" }
   ];
 
   var badgeNode = null;
@@ -179,7 +179,7 @@ window.MubwemNav = (function () {
     // ------------------------------------------------------------ logo block
     var brand = document.createElement("a");
     brand.className = "nav-brand";
-    brand.href = "index.html";
+    brand.href = "/";
 
     var mark = document.createElement("span");
     mark.className = "brand-mark";

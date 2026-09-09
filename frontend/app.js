@@ -4,7 +4,7 @@
  * GET /status with the id token as a bearer token. Rendering lives in
  * dashboard.js.
  *
- * Cards link through to monitor.html rather than carrying their own stats and
+ * Cards link through to /monitor rather than carrying their own stats and
  * incident list — that detail moved to the detail page.
  */
 (function () {
@@ -20,7 +20,7 @@
       MubwemDashboard.start({
         apiUrl: API_URL,
         detailHref: function (siteId) {
-          return "monitor.html?site=" + encodeURIComponent(siteId);
+          return "/monitor?site=" + encodeURIComponent(siteId);
         },
         headers: function () {
           var token = MubwemAuth.getIdToken();

@@ -438,6 +438,46 @@ class MubwemStack(Stack):
             auto_delete_objects=True,
         )
 
+        # Extensionless URLs. The bucket still holds monitor.html; this only
+        # rewrites the path on the way to the origin, so the address bar keeps
+        # showing /monitor. Runs on viewer-request, before the cache lookup.
+        #
+        # A segment is treated as a file when it contains a dot, which is what
+        # keeps style.css and docs/mubwem.drawio.svg untouched - the test is on
+        # the last segment only, so a dot earlier in the path cannot exempt an
+        # extensionless page. Nothing here reads or writes request.querystring,
+        # so ?site=X rides along untouched.
+        rewrite_function = cloudfront.Function(
+            self,
+            "ExtensionlessUrlFunction",
+            runtime=cloudfront.FunctionRuntime.JS_2_0,
+            comment="Append .html to extensionless paths",
+            code=cloudfront.FunctionCode.from_inline(
+                """
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  // "/" and any directory-style path: default_root_object already resolves
+  // these, and appending .html to "/" would ask the origin for "/.html".
+  if (uri.endsWith('/')) {
+    return request;
+  }
+
+  var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
+
+  // A dot in the last segment means it names a file - .css, .js, .svg, and
+  // the .drawio.svg diagrams - so it goes to the origin as written.
+  if (lastSegment.indexOf('.') === -1) {
+    request.uri = uri + '.html';
+  }
+
+  return request;
+}
+"""
+            ),
+        )
+
         distribution = cloudfront.Distribution(
             self,
             "FrontendDistribution",
@@ -446,6 +486,12 @@ class MubwemStack(Stack):
                 origin=origins.S3BucketOrigin.with_origin_access_control(site_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                function_associations=[
+                    cloudfront.FunctionAssociation(
+                        function=rewrite_function,
+                        event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                    )
+                ],
             ),
             comment="MuBWeM dashboard",
             price_class=cloudfront.PriceClass.PRICE_CLASS_100,
@@ -466,16 +512,23 @@ class MubwemStack(Stack):
         # Every authenticated page is its own registered callback. The hosted
         # UI has to return the user to the page they were on, and the redirect
         # URI it is given must match a callback URL character for character -
-        # so signing in from /incidents.html and landing back on "/" is not an
+        # so signing in from /incidents and landing back on "/" is not an
         # option. Every page in the frontend needs a login, so every page that
         # is not the root is listed here.
+        #
+        # These are the extensionless paths the CloudFront Function above
+        # serves, not the S3 object names: what the browser puts in the address
+        # bar is what Cognito has to match, and the browser never sees .html.
+        # Adding a page to the frontend means adding it here too - miss one and
+        # a cold sign-in from it silently lands on the dashboard instead.
         AUTHENTICATED_PAGES = (
-            "monitor.html",
-            "incidents.html",
-            "team.html",
-            "sites.html",
-            "settings.html",
-            "integrations.html",
+            "monitor",
+            "incidents",
+            "team",
+            "sites",
+            "settings",
+            "integrations",
+            "add-monitor",
         )
         page_redirect_uris = [dashboard_url + "/" + page for page in AUTHENTICATED_PAGES]
         all_redirect_uris = [redirect_uri] + page_redirect_uris
@@ -735,8 +788,8 @@ class MubwemStack(Stack):
             value=http_api.api_endpoint + "/admin",
             description="Base path for /admin/users and /admin/sites (JWT required)",
         )
-        CfnOutput(self, "SitesAdminUrl", value=dashboard_url + "/sites.html")
-        CfnOutput(self, "TeamAdminUrl", value=dashboard_url + "/team.html")
+        CfnOutput(self, "SitesAdminUrl", value=dashboard_url + "/sites")
+        CfnOutput(self, "TeamAdminUrl", value=dashboard_url + "/team")
         CfnOutput(self, "SitesTableName", value=sites_table.table_name)
         CfnOutput(self, "AlertTopicArn", value=alert_topic.topic_arn)
         CfnOutput(

@@ -4,7 +4,7 @@
  * page. The permission model is unchanged from the old admin.js: Admins and Editors
  * reach this page, only Admins see delete controls.
  *
- * Creating a monitor moved to add-monitor.html. The inline form that used to
+ * Creating a monitor moved to /add-monitor. The inline form that used to
  * sit under this table was replaced rather than kept alongside it: two ways to
  * create the same thing means two sets of validation to keep in step, and the
  * full page has room to explain the fields.
@@ -86,7 +86,7 @@
 
     var nameCell = text("td", null, null);
     var link = document.createElement("a");
-    link.href = "monitor.html?site=" + encodeURIComponent(site.siteId);
+    link.href = "/monitor?site=" + encodeURIComponent(site.siteId);
     link.textContent = site.name || site.siteId;
     nameCell.appendChild(link);
     row.appendChild(nameCell);
@@ -181,7 +181,7 @@
       el.overall.className = "overall overall-up";
 
       el.panel.hidden = false;
-      // The add form lives on add-monitor.html now; this page links to it.
+      // The add form lives on /add-monitor now; this page links to it.
       load();
     }
   }).catch(function () {

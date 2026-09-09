@@ -75,7 +75,7 @@
      MubwemShell.boot() below hands off to MubwemAuth.init(), which redirects
      to the hosted UI without ever returning. Reading ?site= only inside
      load() would be too late - by the time load() runs the URL is
-     monitor.html?code=... and the site id is gone. */
+     /monitor?code=... and the site id is gone. */
   siteId();
 
   // ------------------------------------------------------------------ render

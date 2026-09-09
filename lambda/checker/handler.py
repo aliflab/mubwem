@@ -301,7 +301,7 @@ def details_url(site_id):
     """
     if not DASHBOARD_URL:
         return ""
-    return "%s/monitor.html?site=%s" % (
+    return "%s/monitor?site=%s" % (
         DASHBOARD_URL,
         urllib.parse.quote(str(site_id), safe=""),
     )

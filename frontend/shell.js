@@ -67,7 +67,7 @@ window.MubwemShell = (function () {
         if (opts.requireGroups && !MubwemAuth.inAnyGroup(opts.requireGroups)) {
           // Nothing on this page is usable by this role. Send them somewhere
           // that is, rather than rendering controls that will be refused.
-          window.location.replace("index.html");
+          window.location.replace("/");
           return null;
         }
 

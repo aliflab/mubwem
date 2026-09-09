@@ -1,10 +1,10 @@
 /* MuBWeM — Create New Monitor, as a full page.
  *
- * Submits to the existing POST /admin/sites — the same request sites.html's
+ * Submits to the existing POST /admin/sites — the same request /sites's
  * inline form used to make, on a page with room to explain each field.
  *
  * Two conveniences sit on top, both wired in shell.js so the edit form on
- * monitor.html behaves identically: "Detect name" asks
+ * /monitor behaves identically: "Detect name" asks
  * POST /admin/sites/preview for a name read off the page's own title, and the
  * Brand field suggests from brands already in use. Only the name is detected
  * from the site — "brand" is this app's own grouping and no webpage knows it.
@@ -114,10 +114,10 @@
         // after creating one is to look at it.
         var id = payload && payload.site && payload.site.siteId;
         if (id) {
-          window.location.href = "monitor.html?site=" + encodeURIComponent(id);
+          window.location.href = "/monitor?site=" + encodeURIComponent(id);
           return;
         }
-        window.location.href = "sites.html";
+        window.location.href = "/sites";
       })
       .catch(function (err) {
         el.submit.disabled = false;

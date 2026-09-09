@@ -63,8 +63,7 @@ window.MubwemDashboard = (function () {
     overall: document.getElementById("overall"),
     summary: document.getElementById("summary"),
     toolbar: document.getElementById("toolbar"),
-    resultCount: document.getElementById("result-count"),
-    filterEmpty: null // created on demand, below the grid
+    resultCount: document.getElementById("result-count")
   };
 
   // ---------------------------------------------------------------- helpers
@@ -865,40 +864,6 @@ window.MubwemDashboard = (function () {
     });
   }
 
-  function clearFilters() {
-    filters.query = "";
-    filters.status = "all";
-    filters.brand = "all";
-    if (toolbar) {
-      var search = el.toolbar.querySelector(".toolbar-search");
-      if (search) search.value = "";
-      syncSegGroup(toolbar.statusGroup, "all");
-      syncBrandChips();
-    }
-    saveView();
-    renderGrid();
-  }
-
-  /* "Nothing matches your filters" and "nothing is being monitored" are
-     different problems with different fixes; the page used to show the same
-     message for both. */
-  function filterEmptyNode() {
-    if (el.filterEmpty) return el.filterEmpty;
-    if (!el.cards || !el.cards.parentNode) return null;
-
-    var node = text("div", "filter-empty", null);
-    node.hidden = true;
-    node.appendChild(text("p", null, "No monitors match these filters."));
-    var button = text("button", null, "Clear filters");
-    button.type = "button";
-    button.addEventListener("click", clearFilters);
-    node.appendChild(button);
-
-    el.cards.parentNode.insertBefore(node, el.cards.nextSibling);
-    el.filterEmpty = node;
-    return node;
-  }
-
   function updateCounts(total, shown) {
     if (el.resultCount) {
       if (filtersActive() && total > 0) {
@@ -913,11 +878,10 @@ window.MubwemDashboard = (function () {
       }
     }
 
-    var noneAtAll = total === 0;
-    var filteredOut = total > 0 && shown === 0;
-    if (el.empty) el.empty.hidden = !noneAtAll;
-    var node = filterEmptyNode();
-    if (node) node.hidden = !filteredOut;
+    // A filtered-to-zero grid is left empty; the result count above it
+    // ("Showing 0 of 8 monitors") is the signal that a filter is hiding
+    // everything. #empty is the different case - nothing monitored at all.
+    if (el.empty) el.empty.hidden = total !== 0;
   }
 
   // ------------------------------------------------------------------ grid

@@ -518,22 +518,6 @@ footer a { color: var(--muted); }
 .panel-head h2 { margin: 0 0 3px; font-size: 15px; }
 .panel-head .panel-hint { margin: 0; max-width: 62ch; }
 
-/* A dashed advisory box. Content must describe what this app actually does. */
-.tip-box {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 20px;
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  background: rgba(99, 102, 241, 0.05);
-}
-
-.tip-box svg { width: 17px; height: 17px; flex: none; color: var(--accent); margin-top: 1px; }
-.tip-title { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-dim); }
-.tip-body { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
-
 /* ==========================================================================
    Status colour: the 4px left border pattern
    ========================================================================== */
@@ -1031,20 +1015,6 @@ span.card-url:hover { text-decoration: none; }
 }
 
 .result-count { margin: -4px 0 14px; font-size: 11.5px; color: var(--muted); }
-
-.filter-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 30px 22px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  color: var(--muted);
-  font-size: 13.5px;
-}
-
-.filter-empty p { margin: 0; }
 
 /* ==========================================================================
    List density

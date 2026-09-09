@@ -1,32 +1,39 @@
 """Alert email rendering for the MuBWeM checker.
 
-Two mails, one shape: a status banner, a headline, one or two sentences
-saying what happened and when, the monitored URL, and a "View details"
-button onto that monitor's page in the dashboard.
+Two mails, one shape: a status banner, a headline, a labelled field table, a
+"View details" button onto that monitor's page in the dashboard, and a footer.
 
-  DOWN       "Went down <time> - <cause>."
-  RECOVERED  the same line, plus "Back up <time>, after <duration> down."
+  DOWN       monitor, URL, root cause, incident start, location
+  RECOVERED  the same, plus when it was resolved and how long it was down
 
-The layout is deliberately prose rather than a label/value field table. An
-alert is read in two seconds on a phone, and a sentence survives that better
-than five rows of which four are the same every time. The region the check ran
-from is real but secondary, so it sits in the footer rather than competing
-with the cause.
+Why tables and inline styles, not divs and a stylesheet. This has to render in
+Gmail web, Gmail mobile, Outlook desktop and Apple Mail, and those disagree on
+almost everything modern. Outlook's engine is Word's: it ignores flexbox, grid
+and most positioning, and several clients strip a <style> block outright. A
+<table> with inline styles on every cell is the one construction all of them
+lay out the same way, so the field list is a real table with a label cell and a
+value cell per row rather than styled divs - a client that drops the CSS still
+gets a two-column table instead of a collapsed stack.
 
-Everything is inline-styled, table-based and 600px wide because that is the
-only layout email clients agree on: no stylesheet, no webfont, no external
-image, no flexbox. Every cell carries an explicit background colour so a
-dark-mode client cannot invert the card into grey-on-grey.
+The button follows the same rule: the background colour and the padding live
+on the <td>, not on the <a>. Outlook frequently ignores padding and
+border-radius set on an anchor, which would leave bare underlined text where
+the button should be; a coloured, padded cell survives, losing only the
+rounded corners.
 
-Each render also returns a plain-text alternative. SES sends both parts, which
-is what keeps the mail readable in a text-only client - and it is the body the
-checker falls back to when it has to publish through SNS instead. SNS appends
-its own unsubscribe footer below that body; everything above it is ours.
+Every cell also carries an explicit background colour so a dark-mode client
+cannot invert the card into grey-on-grey, and the card is 600px because that
+is the width every client's preview pane assumes.
 
-Every clause is optional. Incidents opened before rootCause and region existed
-carry neither, so a missing value drops its clause rather than printing a
-placeholder - "Went down 09 Sep 2026, 03:59 UTC." is a whole sentence, and
-that is the degraded form.
+Each render also returns a plain-text alternative carrying the same fields in
+the same order, aligned on padded labels. SES sends both parts, which is what
+keeps the mail readable in a text-only client - and it is the body the checker
+falls back to when it has to publish through SNS instead. SNS appends its own
+unsubscribe block below that body; everything above it is ours.
+
+Every row is optional. Incidents opened before rootCause and region existed
+carry neither, so a missing value drops its whole row rather than printing
+"Unknown" or an empty cell, and the rows that remain still align.
 
 Stdlib only, so lambda/checker/ stays deployable with no bundling step.
 """
@@ -42,10 +49,13 @@ UP_COLOR = "#1e8449"
 PAGE_BG = "#f4f5f7"
 CARD_BG = "#ffffff"
 RULE = "#e5e7eb"
-BODY_FG = "#374151"
+LABEL_FG = "#6b7280"
 VALUE_FG = "#111827"
 MUTED_FG = "#8a9099"
 LINK_FG = "#1a5fb4"
+
+# Location is a field row again, so the footer no longer carries the region.
+FOOTER_NOTE = "Sent by MuBWeM."
 
 # A check runs from exactly one region (the stack's own), so this only needs
 # the regions someone might plausibly deploy MuBWeM into. An unmapped code
@@ -78,10 +88,6 @@ REGION_LABELS = {
 # so it must not be rendered as one.
 UNKNOWN_REGION = "unknown"
 
-# Written as an escape, not a literal, so the shipped source file stays pure
-# ASCII - Code.from_asset zips this directory verbatim.
-EM_DASH = "\u2014"
-
 
 # ----------------------------------------------------------------------------
 # Display formatting
@@ -93,8 +99,8 @@ EM_DASH = "\u2014"
 def region_label(code):
     """Turn a region code into "Sydney, Australia (ap-southeast-2)".
 
-    None when there is no usable region, so the footer can drop the clause
-    rather than claim the check ran from somewhere called "unknown".
+    None when there is no usable region, so the Location row is dropped rather
+    than claiming the check ran from somewhere called "unknown".
     """
     if not code or str(code).strip().lower() == UNKNOWN_REGION:
         return None
@@ -105,11 +111,10 @@ def region_label(code):
 def human_time(value):
     """An ISO8601 string (or datetime) as "08 Sep 2026, 14:02 UTC".
 
-    Minute precision: the sentence reads better without seconds, and the
-    duration clause beside it carries the real resolution. Falls back to the
-    raw value if it will not parse - an ugly timestamp in the mail beats a mail
-    that never sends - and None when there is nothing to format, which drops
-    the clause that would have held it.
+    Minute precision: the duration beside it carries the real resolution.
+    Falls back to the raw value if it will not parse - an ugly timestamp in the
+    mail beats a mail that never sends - and None when there is nothing to
+    format, which drops the row that would have held it.
     """
     if not value:
         return None
@@ -131,8 +136,8 @@ def human_duration(seconds):
     """Seconds as prose: "45 seconds", "13 minutes", "2 hours 11 minutes".
 
     Rounded to the nearest whole unit rather than truncated, so it agrees with
-    the two minute-precision timestamps printed either side of it. None for
-    anything unusable, which drops the "after ... down" clause entirely.
+    the two minute-precision timestamps in the rows around it. None for
+    anything unusable, which drops the "(down for ...)" clause entirely.
     """
     try:
         total = int(seconds)
@@ -141,17 +146,17 @@ def human_duration(seconds):
     if total < 0:
         return None
     # A zero duration means the two timestamps were identical, which in
-    # practice means close_incident could not parse one of them. "after 0
-    # seconds down" states that as fact; dropping the clause does not.
+    # practice means close_incident could not parse one of them. "down for 0
+    # seconds" states that as fact; dropping the clause does not.
     if total == 0:
         return None
     if total < 60:
         return _plural(total, "second")
 
     # int(x + 0.5), not round(): round() is banker's rounding, which sends both
-    # 90s and 150s to "2 minutes". Each unit can round up into the next one,
-    # so every branch below has to catch its own overflow - without this, 3599s
-    # renders as "60 minutes" rather than "1 hour".
+    # 90s and 150s to "2 minutes". Each unit can round up into the next one, so
+    # every branch below catches its own overflow - without this, 3599s renders
+    # as "60 minutes" rather than "1 hour".
     if total < 3600:
         minutes = int(total / 60.0 + 0.5)
         if minutes == 60:
@@ -178,48 +183,99 @@ def human_duration(seconds):
     return _plural(days, "day")
 
 
-# ----------------------------------------------------------------------------
-# Sentences
-#
-# Each clause is dropped when its value is missing, so an incident row written
-# before rootCause existed degrades to a shorter true sentence rather than to
-# "Unknown" or a dangling dash.
-# ----------------------------------------------------------------------------
-def went_down_sentence(started, cause):
-    text = "Went down %s" % started if started else "Went down"
-    if cause:
-        text += " %s %s" % (EM_DASH, cause)
-    return text + "."
-
-
-def back_up_sentence(resolved, duration):
-    text = "Back up %s" % resolved if resolved else "Back up"
+def resolved_value(resolved, duration):
+    """"09 Sep 2026, 04:12 UTC (down for 13 minutes)" - duration optional."""
+    if not resolved:
+        return None
     if duration:
-        text += ", after %s down" % duration
-    return text + "."
+        return "%s (down for %s)" % (resolved, duration)
+    return resolved
 
 
-def footer_sentence(location):
-    if location:
-        return "Sent by MuBWeM, checked from %s." % location
-    return "Sent by MuBWeM."
+# ----------------------------------------------------------------------------
+# Field collection
+#
+# One list drives both renderings, so the HTML table and the text block cannot
+# drift on which fields exist or what order they come in. Each entry is
+# (label, text_value, html_value); a falsy value drops the whole row.
+# ----------------------------------------------------------------------------
+def _field(label, value, html_value=None):
+    if not value:
+        return None
+    return (label, value, html_value if html_value is not None else escape(value))
+
+
+def _collect(*fields):
+    return [f for f in fields if f is not None]
 
 
 # ----------------------------------------------------------------------------
 # HTML fragments
+#
+# Every table carries role="presentation" so a screen reader announces the
+# content rather than "table, 5 rows", plus explicit cellpadding, cellspacing
+# and border attributes and border-collapse - that combination is what stops
+# Outlook adding spacing of its own around the cells.
 # ----------------------------------------------------------------------------
-def _button(url, color):
-    """A bulletproof button: padding on the anchor, solid bgcolor underneath."""
-    safe = escape(url, quote=True)
+def _table_open(extra_style=""):
     return (
-        '<table role="presentation" cellpadding="0" cellspacing="0" border="0">'
-        '<tr><td align="center" bgcolor="%s" style="border-radius:6px;">'
-        '<a href="%s" target="_blank" style="display:inline-block;'
-        "padding:14px 38px;font-family:Helvetica,Arial,sans-serif;font-size:15px;"
-        "font-weight:bold;color:#ffffff;text-decoration:none;border-radius:6px;"
-        'background-color:%s;">View details</a>'
-        "</td></tr></table>"
-    ) % (color, safe, color)
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
+        ' style="border-collapse:collapse;%s">' % extra_style
+    )
+
+
+def _field_table(fields):
+    """The label/value table. The last row loses its rule so the block ends flush."""
+    rows = []
+    for index, (label, _, html_value) in enumerate(fields):
+        border = "" if index == len(fields) - 1 else "border-bottom:1px solid %s;" % RULE
+        rows.append(
+            "<tr>"
+            # The label column width is set as an attribute as well as in the
+            # style: Outlook honours the attribute and ignores the CSS width.
+            '<td width="34%%" valign="top" style="width:34%%;'
+            "padding:13px 16px 13px 0;%s background-color:%s;"
+            "font-family:Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;"
+            "letter-spacing:0.08em;text-transform:uppercase;color:%s;"
+            'vertical-align:top;">%s</td>'
+            '<td valign="top" style="padding:13px 0;%s background-color:%s;'
+            "font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;"
+            'color:%s;vertical-align:top;word-break:break-word;">%s</td>'
+            "</tr>"
+            % (
+                border,
+                CARD_BG,
+                LABEL_FG,
+                escape(label),
+                border,
+                CARD_BG,
+                VALUE_FG,
+                html_value,
+            )
+        )
+    return _table_open("width:100%;") + "".join(rows) + "</table>"
+
+
+def _button(url, color):
+    """Bulletproof button: colour and padding on the <td>, never on the <a>.
+
+    Outlook drops padding and border-radius set on an anchor, which would leave
+    a bare underlined link where the button should be. Painting the cell
+    instead costs only the rounded corners there.
+    """
+    return (
+        _table_open()
+        + (
+            '<tr><td align="center" bgcolor="%s" style="background-color:%s;'
+            "padding:14px 38px;border-radius:6px;"
+            'mso-padding-alt:14px 38px;">'
+            '<a href="%s" target="_blank" style="display:block;'
+            "font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:20px;"
+            'font-weight:bold;color:#ffffff;text-decoration:none;">View details</a>'
+            "</td></tr></table>"
+        )
+        % (color, color, escape(url, quote=True))
+    )
 
 
 def _url_link(url):
@@ -230,23 +286,7 @@ def _url_link(url):
     )
 
 
-def _shell(status_word, color, headline, sentences, url, details_url, footer_note):
-    sentence_html = "".join(
-        '<tr><td style="padding:%s 32px 0 32px;background-color:%s;'
-        "font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;"
-        'color:%s;word-break:break-word;">%s</td></tr>'
-        % ("14" if i == 0 else "4", CARD_BG, BODY_FG, escape(sentence))
-        for i, sentence in enumerate(sentences)
-    )
-
-    url_html = ""
-    if url:
-        url_html = (
-            '<tr><td style="padding:12px 32px 0 32px;background-color:%s;'
-            "font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;"
-            'word-break:break-all;">%s</td></tr>'
-        ) % (CARD_BG, _url_link(url))
-
+def _shell(status_word, color, headline, fields, details_url):
     button_block = ""
     if details_url:
         button_block = (
@@ -264,16 +304,17 @@ def _shell(status_word, color, headline, sentences, url, details_url, footer_not
         '<div style="display:none;max-height:0;overflow:hidden;opacity:0;">'
         "%(preheader)s</div>"
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
-        ' width="100%%" style="background-color:%(page_bg)s;">'
+        ' width="100%%" style="border-collapse:collapse;'
+        'background-color:%(page_bg)s;">'
         '<tr><td align="center">'
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
-        ' width="600" style="width:100%%;max-width:600px;'
+        ' width="600" style="border-collapse:collapse;width:100%%;max-width:600px;'
         "background-color:%(card_bg)s;border-radius:10px;overflow:hidden;"
         'border:1px solid %(rule)s;">'
         # Banner
         '<tr><td style="background-color:%(color)s;padding:18px 32px;">'
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0"'
-        ' width="100%%"><tr>'
+        ' width="100%%" style="border-collapse:collapse;"><tr>'
         '<td align="left" style="font-family:Helvetica,Arial,sans-serif;'
         'font-size:17px;font-weight:bold;letter-spacing:0.02em;color:#ffffff;">'
         "MuBWeM</td>"
@@ -282,14 +323,15 @@ def _shell(status_word, color, headline, sentences, url, details_url, footer_not
         "%(status_word)s</td>"
         "</tr></table></td></tr>"
         # Headline
-        '<tr><td style="padding:32px 32px 0 32px;background-color:%(card_bg)s;'
-        "font-family:Helvetica,Arial,sans-serif;font-size:22px;line-height:30px;"
+        '<tr><td style="padding:30px 32px 0 32px;background-color:%(card_bg)s;'
+        "font-family:Helvetica,Arial,sans-serif;font-size:21px;line-height:29px;"
         'font-weight:bold;color:%(value_fg)s;">%(headline)s</td></tr>'
-        "%(sentences)s"
-        "%(url)s"
+        # Field table
+        '<tr><td style="padding:12px 32px 0 32px;background-color:%(card_bg)s;">'
+        "%(fields)s</td></tr>"
         "%(button)s"
         # Footer
-        '<tr><td style="padding:30px 32px 28px 32px;background-color:%(card_bg)s;'
+        '<tr><td style="padding:28px 32px 26px 32px;background-color:%(card_bg)s;'
         "font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;"
         'color:%(muted)s;">%(footer)s</td></tr>'
         "</table></td></tr></table></div>"
@@ -300,27 +342,23 @@ def _shell(status_word, color, headline, sentences, url, details_url, footer_not
         "color": color,
         "status_word": escape(status_word),
         "headline": escape(headline),
-        "sentences": sentence_html,
-        "url": url_html,
+        "fields": _field_table(fields),
         "button": button_block,
         "value_fg": VALUE_FG,
         "muted": MUTED_FG,
-        "footer": escape(footer_note),
-        # The first sentence, not the headline - the headline is already most
-        # of the subject line, so repeating it wastes the preview.
-        "preheader": escape(sentences[0]) if sentences else escape(headline),
+        "footer": escape(FOOTER_NOTE),
+        "preheader": escape(headline),
     }
 
 
-def _text(headline, sentences, url, details_url, footer_note):
+def _text(headline, fields, details_url):
     """Plain-text twin. SNS appends its own unsubscribe block below this."""
+    width = max(len(label) for label, _, _ in fields)
     lines = [headline.upper(), ""]
-    lines += sentences
-    if url:
-        lines += ["", url]
+    lines += ["  %-*s   %s" % (width, label, value) for label, value, _ in fields]
     if details_url:
         lines += ["", "View details (sign-in required):", "  " + details_url]
-    lines += ["", "--", footer_note]
+    lines += ["", "--", FOOTER_NOTE]
     return "\n".join(lines)
 
 
@@ -337,41 +375,50 @@ def render_down(ctx):
     url = ctx.get("url") or ""
     details = ctx.get("details_url") or ""
 
+    fields = _collect(
+        _field("Monitor", name),
+        _field("URL", url, _url_link(url) if url else None),
+        _field("Root cause", ctx.get("root_cause")),
+        _field("Incident started", human_time(ctx.get("started_at"))),
+        _field("Location", region_label(ctx.get("location"))),
+    )
     headline = "%s is down" % name
-    sentences = [
-        went_down_sentence(human_time(ctx.get("started_at")), ctx.get("root_cause"))
-    ]
-    footer = footer_sentence(region_label(ctx.get("location")))
 
     return (
         "[MuBWeM] DOWN - %s" % name,
-        _text(headline, sentences, url, details, footer),
-        _shell("DOWN", DOWN_COLOR, headline, sentences, url, details, footer),
+        _text(headline, fields, details),
+        _shell("DOWN", DOWN_COLOR, headline, fields, details),
     )
 
 
 def render_recovered(ctx):
     """Return (subject, text_body, html_body) for an incident that just closed.
 
-    Two sentences, not one: a recovery line on its own would drop the cause,
-    and what broke is most of why anyone opens a resolved alert at all.
+    Downtime rides along with the resolved time rather than claiming a row of
+    its own - it is derived from the two timestamps already on screen.
     """
     name = ctx.get("name") or ctx.get("siteId") or "Monitor"
     url = ctx.get("url") or ""
     details = ctx.get("details_url") or ""
 
-    headline = "%s is back up" % name
-    sentences = [
-        went_down_sentence(human_time(ctx.get("started_at")), ctx.get("root_cause")),
-        back_up_sentence(
-            human_time(ctx.get("resolved_at")),
-            human_duration(ctx.get("duration_sec")),
+    fields = _collect(
+        _field("Monitor", name),
+        _field("URL", url, _url_link(url) if url else None),
+        _field("Root cause", ctx.get("root_cause")),
+        _field("Incident started", human_time(ctx.get("started_at"))),
+        _field(
+            "Resolved at",
+            resolved_value(
+                human_time(ctx.get("resolved_at")),
+                human_duration(ctx.get("duration_sec")),
+            ),
         ),
-    ]
-    footer = footer_sentence(region_label(ctx.get("location")))
+        _field("Location", region_label(ctx.get("location"))),
+    )
+    headline = "%s is back up" % name
 
     return (
         "[MuBWeM] RESOLVED - %s" % name,
-        _text(headline, sentences, url, details, footer),
-        _shell("RESOLVED", UP_COLOR, headline, sentences, url, details, footer),
+        _text(headline, fields, details),
+        _shell("RESOLVED", UP_COLOR, headline, fields, details),
     )

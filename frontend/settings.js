@@ -247,15 +247,6 @@
       )
     );
 
-    host.appendChild(
-      settingRow(
-        "Deployment default",
-        "What a browser with no saved preference uses. Set at deploy time " +
-          "with displayTimezone, and defaults to the schedule timezone.",
-        window.MUBWEM_DISPLAY_TIMEZONE || null
-      )
-    );
-
     refresh();
   }
 

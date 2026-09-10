@@ -325,10 +325,9 @@ window.MubwemDashboard = (function () {
   function bucketWindow(index) {
     var end = new Date(Date.now() - (23 - index) * 3600000);
     var start = new Date(end.getTime() - 3600000);
-    function hhmm(d) {
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    }
-    return hhmm(start) + "–" + hhmm(end);
+    return (
+      MubwemShell.formatTimeOfDay(start) + "–" + MubwemShell.formatTimeOfDay(end)
+    );
   }
 
   function bucketExplanation(state, threshold) {
@@ -407,12 +406,9 @@ window.MubwemDashboard = (function () {
       var li = document.createElement("li");
       li.className = inc.resolved ? "incident" : "incident incident-open";
 
-      var when = new Date(inc.startedAt);
-      var whenLabel = isNaN(when.getTime())
-        ? inc.startedAt
-        : when.toLocaleString();
-
-      li.appendChild(text("span", "incident-when", whenLabel));
+      li.appendChild(
+        text("span", "incident-when", MubwemShell.formatDateTime(inc.startedAt))
+      );
       li.appendChild(
         text(
           "span",
@@ -1032,6 +1028,10 @@ window.MubwemDashboard = (function () {
     setInterval(refresh, POLL_MS);
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) refresh();
+    });
+    // Redraw from the payload already in hand - a zone change needs no request.
+    MubwemShell.onTimeZoneChange(function () {
+      if (lastPayload) render(lastPayload, lastOptions);
     });
   }
 

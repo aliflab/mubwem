@@ -1325,6 +1325,7 @@ select.role-select:focus-visible {
   text-decoration: underline;
 }
 
+.link-button[hidden] { display: none; }
 .link-button:hover:not(:disabled) { background: none; border: none; color: #818cf8; }
 .link-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -1503,8 +1504,17 @@ a.button-link.primary:hover { background: #4f46e5; border-color: #4f46e5; color:
 .setting-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .setting-note { font-size: 11.5px; color: var(--muted); margin: 2px 0 0; line-height: 1.5; }
 
+/* The one interactive row. Wider than the read-only column because zone names
+   run long ("America/Argentina/Buenos Aires"), and top-aligned because the
+   control stacks a sample line and a reset button under the select. */
+.setting-row-control { grid-template-columns: minmax(0, 1fr) 260px; align-items: start; }
+.setting-row-control .field select { width: 100%; min-width: 0; }
+.setting-row-control .setting-sample { margin-top: 8px; }
+.setting-row-control .link-button { align-self: start; padding: 0; font-size: 11.5px; }
+
 @media (max-width: 620px) {
-  .setting-row { grid-template-columns: minmax(0, 1fr); }
+  .setting-row,
+  .setting-row-control { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Channel rows: one configured, others explicitly not. */

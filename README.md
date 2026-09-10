@@ -122,7 +122,7 @@ A persistent side navigation (`nav.js`) is shared by every page. **Monitors** an
 | `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
 | `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`; Brand autocompletes from brands already in use. |
 | `/team` | Admins | User management. |
-| `/settings` | any signed-in user | **Stub.** Read-only view of deploy-time configuration. |
+| `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker. |
 | `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
 
 The dashboard toolbar filters the `/status` document the page is **already** polling — no request, no backend change, and so no `?q=` or `?status=` parameter on any route. Filtering never re-sorts: the API returns sites down-first then by name, and that ordering survives every filter. The summary cards always describe the whole deployment, with a "Showing 3 of 8 monitors" line making the filtered subset explicit. Status filter and density persist in `localStorage`; search text and brand do not.
@@ -136,6 +136,12 @@ Each card's countdown ring is drawn from `lastCheckedAt` plus `scheduleIntervalS
 > *cold* load bounces through the hosted UI and lands on the dashboard instead.
 
 `/settings` and `/integrations` are **placeholders, shipped as placeholders**, and say so on the page. There is nothing behind them yet: alerting is one SES sender and one recipient fixed at deploy time, and there are no webhooks, API keys or third-party targets.
+
+The one exception on `/settings` is the **display timezone** picker, which is a real control because it is purely local. It decides how the browser renders timestamps — the incident table, the dashboard's incident feed and hourly-bar tooltips, the monitor response-time chart, and the `Started` column of the incidents CSV export. Every absolute time is labelled with its zone, so the same incident never reads as two different times depending on which page you opened it from.
+
+It changes nothing that is recorded. All three Lambdas write ISO8601 UTC with a trailing `Z` via an identical `_iso()` helper, and `UptimeChecks.checkedAt` and `Incidents.startedAt` are DynamoDB sort keys that depend on that fixed-width format sorting lexicographically. Alert emails stay UTC too — they are read outside the browser, where no preference exists.
+
+Resolution is three layers, highest first: the viewer's choice in `localStorage` (`mubwem.timeZone`, including an explicit "browser local"), then `displayTimezone` from the generated `config.js`, then the browser's own zone. An unknown zone name — a stale saved value, or a typo in CDK context — falls back to browser local rather than throwing.
 
 ### Login
 
@@ -230,6 +236,7 @@ cp .env.example .env               # .env is gitignored
 | Check retention (days) | `MUBWEM_CHECKS_TTL_DAYS` | `checksTtlDays` | `30` |
 | Schedule | `MUBWEM_SCHEDULE_EXPRESSION` | `scheduleExpression` | `rate(1 minute)` |
 | Schedule timezone | `MUBWEM_SCHEDULE_TIMEZONE` | `scheduleTimezone` | `Australia/Sydney` |
+| Dashboard display timezone | `MUBWEM_DISPLAY_TIMEZONE` | `displayTimezone` | the schedule timezone |
 | Region | `MUBWEM_REGION` | `region` | `ap-southeast-2` |
 | Account | `MUBWEM_ACCOUNT` | `account` | `CDK_DEFAULT_ACCOUNT` |
 | Cognito domain prefix | — | `cognitoDomainPrefix` | derived from the stack id |

@@ -129,13 +129,8 @@
       );
       row.appendChild(statusCell);
 
-      var when = new Date(incident.startedAt);
       row.appendChild(
-        text(
-          "td",
-          null,
-          isNaN(when.getTime()) ? incident.startedAt : when.toLocaleString()
-        )
+        text("td", null, MubwemShell.formatDateTime(incident.startedAt))
       );
 
       row.appendChild(
@@ -186,7 +181,10 @@
         [
           incident.siteName,
           incident.resolved ? "Resolved" : "Ongoing",
-          incident.startedAt,
+          // Offset-bearing ISO in the display timezone, so the file agrees
+          // with the table it was exported from. Still machine-readable -
+          // a spreadsheet parses "+10:00" the same way it parses "Z".
+          MubwemShell.formatIsoInZone(incident.startedAt),
           // Blank rather than 0 for an incident still running: a duration of
           // zero would read as "it lasted no time at all".
           incident.resolved && incident.durationSec !== null &&
@@ -217,6 +215,8 @@
       return;
     }
 
+    // Filename stays UTC whatever the display zone is, so downloaded files
+    // keep sorting chronologically in a directory listing.
     var stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     var name =
       "mubwem-incidents-" +
@@ -281,6 +281,7 @@
     ready: function () {
       el.filter.addEventListener("change", render);
       if (el.exportBtn) el.exportBtn.addEventListener("click", exportCsv);
+      MubwemShell.onTimeZoneChange(render);
       refresh();
       setInterval(refresh, POLL_MS);
     }

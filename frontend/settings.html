@@ -25,7 +25,7 @@
           </div>
           <div class="meta">
             <div class="meta-status">
-              <div id="overall" class="overall">Read-only</div>
+              <div id="overall" class="overall">Configuration</div>
             </div>
             <span class="meta-divider" aria-hidden="true"></span>
             <div class="session">
@@ -40,12 +40,23 @@
         <div id="error" class="error" hidden></div>
 
         <div class="stub-banner">
-          <strong>This page is read-only.</strong>
-          Every value below is fixed at deploy time and shown here for
-          reference. Change them with <code>cdk deploy -c key=value</code> or
-          the <code>MUBWEM_</code> environment variables described in the
-          README. Nothing on this page writes anything.
+          <strong>Display timezone aside, this page is read-only.</strong>
+          The operational values below are fixed at deploy time and shown here
+          for reference. Change them with <code>cdk deploy -c key=value</code>
+          or the <code>MUBWEM_</code> environment variables described in the
+          README. The timezone control is a display preference saved in this
+          browser only — it changes what you see, never what runs.
         </div>
+
+        <section class="panel">
+          <h2>Display</h2>
+          <p class="panel-hint">
+            How timestamps are shown to you. Checks, incidents and alert emails
+            are all recorded in UTC regardless; this only changes how the
+            dashboard reads them back.
+          </p>
+          <div id="display"></div>
+        </section>
 
         <section class="panel">
           <h2>Monitoring intervals</h2>
@@ -87,7 +98,7 @@
       </main>
 
       <footer>
-        <span>Nothing on this page writes anything.</span>
+        <span>Nothing on this page writes to AWS.</span>
       </footer>
     </div>
   </div>

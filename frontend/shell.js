@@ -300,6 +300,223 @@ window.MubwemShell = (function () {
   }
 
   // ------------------------------------------------------------- formatting
+  /* Timezone of every absolute time the dashboard prints.
+     Three layers, highest first:
+       1. the viewer's own choice, saved in localStorage from the Settings page
+       2. MUBWEM_DISPLAY_TIMEZONE, baked into config.js at deploy time
+       3. "auto" - whatever the browser is set to
+     This is presentation only. Every timestamp on the wire is ISO8601 UTC with
+     a trailing Z, and stays that way: UptimeChecks.checkedAt and
+     Incidents.startedAt are DynamoDB sort keys that rely on that fixed-width
+     format sorting lexicographically. Nothing here touches it. */
+  var TZ_KEY = "mubwem.timeZone";
+
+  function storedZone() {
+    try {
+      return localStorage.getItem(TZ_KEY);
+    } catch (e) {
+      return null; /* private browsing - fall through to the deploy default */
+    }
+  }
+
+  function forgetZone() {
+    try {
+      localStorage.removeItem(TZ_KEY);
+    } catch (e) {
+      /* nothing to forget, then */
+    }
+  }
+
+  function timeZone() {
+    var chosen = storedZone() || window.MUBWEM_DISPLAY_TIMEZONE || "auto";
+    if (chosen === "auto") return "auto";
+    // A zone name can be stale (saved before a browser upgrade) or simply a
+    // typo in CDK context. Intl throws RangeError on one it does not know, and
+    // an unreadable timestamp is not worth taking the whole page down for.
+    if (!formatterFor(chosen, { year: "numeric" })) {
+      if (storedZone() === chosen) forgetZone();
+      return "auto";
+    }
+    return chosen;
+  }
+
+  /* "auto" is stored, not treated as "no preference" - picking Browser local
+     where the deployment default is Australia/Sydney has to mean browser
+     local. resetTimeZone() is the way back to the deployment default. */
+  function setTimeZone(value) {
+    try {
+      localStorage.setItem(TZ_KEY, value || "auto");
+    } catch (e) {
+      /* it just will not persist past this tab */
+    }
+    announceZone();
+  }
+
+  function resetTimeZone() {
+    forgetZone();
+    announceZone();
+  }
+
+  function announceZone() {
+    // Let an open page re-render without a reload.
+    try {
+      window.dispatchEvent(new CustomEvent("mubwem:timezone"));
+    } catch (e) {
+      /* no CustomEvent constructor - the preference is still saved */
+    }
+  }
+
+  /* Re-render on a zone change. Two events, because there are two ways it can
+     happen: the custom one for this tab, and the native storage event for a
+     change made in another tab (which fires only in the *other* tabs, so the
+     two never double up). Without this a dashboard left open in a second tab
+     keeps showing the old zone until its next poll. */
+  function onTimeZoneChange(fn) {
+    window.addEventListener("mubwem:timezone", function () {
+      fn();
+    });
+    window.addEventListener("storage", function (event) {
+      if (!event || event.key === null || event.key === TZ_KEY) fn();
+    });
+  }
+
+  /* The zone name to show a human. "auto" resolves to whatever the browser
+     actually resolved it to, which is more useful than the word "auto". */
+  function zoneLabel() {
+    var zone = timeZone();
+    if (zone !== "auto") return zone;
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "browser local";
+    } catch (e) {
+      return "browser local";
+    }
+  }
+
+  /* Intl.DateTimeFormat construction is not cheap and these run once per table
+     row, so every distinct (zone, options) pair is built once and kept.
+     Returns null rather than throwing when the zone is unknown - that is what
+     makes timeZone() above able to test a candidate. */
+  var formatters = Object.create(null);
+
+  /* `locale` is undefined for anything a human reads, so date order and month
+     naming stay the viewer's own - that is what the toLocaleString calls this
+     replaced already did, and only the zone is being added. The CSV builder
+     passes an explicit locale because it needs Latin digits and a fixed
+     structure to reassemble. */
+  function formatterFor(zone, options, locale) {
+    var key = (locale || "-") + "|" + zone + "|" + JSON.stringify(options);
+    if (key in formatters) return formatters[key];
+
+    var opts = {};
+    for (var name in options) {
+      if (Object.prototype.hasOwnProperty.call(options, name)) {
+        opts[name] = options[name];
+      }
+    }
+    if (zone !== "auto") opts.timeZone = zone;
+
+    var made;
+    try {
+      made = new Intl.DateTimeFormat(locale, opts);
+    } catch (e) {
+      made = null;
+    }
+    formatters[key] = made;
+    return made;
+  }
+
+  /* Accepts an ISO string, epoch milliseconds or a Date. Returns null for
+     anything that is not a real instant, so each caller can decide what to
+     show in its place. */
+  function toDate(value) {
+    if (value === null || value === undefined || value === "") return null;
+    var date = value instanceof Date ? value : new Date(value);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  var DATE_TIME_OPTS = {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short"
+  };
+
+  /* "12 Sep 2026, 14:02 AEST" - an absolute time that says which zone it is
+     in, so the same incident never reads as two different times depending on
+     which page you opened it from. */
+  function formatDateTime(value) {
+    var date = toDate(value);
+    if (!date) return value === null || value === undefined ? "—" : String(value);
+    var fmt = formatterFor(timeZone(), DATE_TIME_OPTS);
+    if (!fmt) return date.toLocaleString();
+    return fmt.format(date);
+  }
+
+  var TIME_OF_DAY_OPTS = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+
+  /* "14:02" - for chart axis ticks and hour-bar tooltips, where repeating the
+     zone on every tick would be noise. The zone is stated once nearby. */
+  function formatTimeOfDay(value) {
+    var date = toDate(value);
+    if (!date) return "—";
+    var fmt = formatterFor(timeZone(), TIME_OF_DAY_OPTS);
+    if (!fmt) return date.toLocaleTimeString([], TIME_OF_DAY_OPTS);
+    return fmt.format(date);
+  }
+
+  var ISO_OPTS = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset"
+  };
+
+  function part(parts, type) {
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === type) return parts[i].value;
+    }
+    return "";
+  }
+
+  /* "2026-09-12T14:02:11+10:00" - the CSV form. Offset-bearing rather than
+     zone-named so a spreadsheet can parse it, and so the exported file agrees
+     with the table it was exported from instead of silently being UTC.
+     There is no built-in for this; formatToParts is the only way to get a
+     wall-clock reading in an arbitrary zone. */
+  function formatIsoInZone(value) {
+    var date = toDate(value);
+    if (!date) return value === null || value === undefined ? "" : String(value);
+
+    var zone = timeZone();
+    var fmt = formatterFor(zone, ISO_OPTS, "en-GB");
+    if (!fmt || !fmt.formatToParts) return date.toISOString();
+
+    var parts;
+    try {
+      parts = fmt.formatToParts(date);
+    } catch (e) {
+      return date.toISOString();
+    }
+
+    // "GMT+10:00" / "GMT" (UTC itself) -> "+10:00" / "Z".
+    var offset = part(parts, "timeZoneName").replace("GMT", "");
+    if (!offset || offset === "+00:00" || offset === "-00:00") offset = "Z";
+
+    return (
+      part(parts, "year") + "-" + part(parts, "month") + "-" + part(parts, "day") +
+      "T" +
+      part(parts, "hour") + ":" + part(parts, "minute") + ":" + part(parts, "second") +
+      offset
+    );
+  }
+
   function relativeTime(iso) {
     if (!iso) return "never";
     var then = Date.parse(iso);
@@ -356,6 +573,14 @@ window.MubwemShell = (function () {
     resolveApiUrl: resolveApiUrl,
     distinctBrands: distinctBrands,
     attachBrandSuggestions: attachBrandSuggestions,
-    attachNameDetection: attachNameDetection
+    attachNameDetection: attachNameDetection,
+    timeZone: timeZone,
+    setTimeZone: setTimeZone,
+    resetTimeZone: resetTimeZone,
+    onTimeZoneChange: onTimeZoneChange,
+    zoneLabel: zoneLabel,
+    formatDateTime: formatDateTime,
+    formatTimeOfDay: formatTimeOfDay,
+    formatIsoInZone: formatIsoInZone
   };
 })();

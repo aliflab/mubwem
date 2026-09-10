@@ -117,6 +117,14 @@ class MubwemStack(Stack):
         schedule_timezone = (
             self.node.try_get_context("scheduleTimezone") or "Australia/Sydney"
         )
+        # The zone the dashboard renders timestamps in by default. Falls back to
+        # the schedule timezone rather than being configured twice: a deployment
+        # that runs its checks on Sydney time is being watched from Sydney. This
+        # is only a display default - the browser can override it per-user, and
+        # every timestamp on the wire stays ISO8601 UTC regardless.
+        display_timezone = (
+            self.node.try_get_context("displayTimezone") or schedule_timezone
+        )
         # Published to the frontend so the dashboard can draw a countdown to
         # the next check. Derived from the schedule rather than configured
         # twice, so the two cannot drift apart.
@@ -761,6 +769,10 @@ function handler(event) {
                 "window.MUBWEM_CHECK_TIMEOUT_SEC = %d;" % check_timeout_sec,
                 "window.MUBWEM_CHECKS_TTL_DAYS = %d;" % checks_ttl_days,
                 'window.MUBWEM_CHECK_REGION = "%s";' % Aws.REGION,
+                # The default display timezone for the dashboard. Not a secret
+                # and not load-bearing: the frontend falls back to the browser's
+                # own zone if this is absent or unrecognised.
+                'window.MUBWEM_DISPLAY_TIMEZONE = "%s";' % display_timezone,
                 "",
             ]
         )

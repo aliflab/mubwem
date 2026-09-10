@@ -202,10 +202,7 @@
             ticks: {
               maxTicksLimit: 8,
               callback: function (value) {
-                return new Date(value).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit"
-                });
+                return MubwemShell.formatTimeOfDay(value);
               }
             },
             grid: { display: false }
@@ -220,7 +217,7 @@
           tooltip: {
             callbacks: {
               title: function (items) {
-                return new Date(items[0].parsed.x).toLocaleString();
+                return MubwemShell.formatDateTime(items[0].parsed.x);
               },
               label: function (item) {
                 return item.parsed.y + " ms";
@@ -498,6 +495,14 @@
           el.editPanel.hidden = !el.editPanel.hidden;
         });
       }
+      // Redraw the monitor already loaded, including the Chart.js axis and
+      // tooltips, without re-fetching it.
+      MubwemShell.onTimeZoneChange(function () {
+        if (!current) return;
+        renderOverview(current);
+        renderChart(current);
+        renderIncidents(current);
+      });
       load();
     }
   }).catch(function () {

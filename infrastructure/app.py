@@ -29,6 +29,7 @@ ENV_OVERRIDES = {
     "MUBWEM_CHECKS_TTL_DAYS": "checksTtlDays",
     "MUBWEM_SCHEDULE_EXPRESSION": "scheduleExpression",
     "MUBWEM_SCHEDULE_TIMEZONE": "scheduleTimezone",
+    "MUBWEM_DISPLAY_TIMEZONE": "displayTimezone",
     "MUBWEM_REGION": "region",
     "MUBWEM_ACCOUNT": "account",
 }

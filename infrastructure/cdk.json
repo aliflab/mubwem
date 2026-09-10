@@ -21,6 +21,7 @@
     "checksTtlDays": 30,
     "scheduleExpression": "rate(1 minute)",
     "scheduleTimezone": "Australia/Sydney",
+    "displayTimezone": "Australia/Sydney",
     "region": "ap-southeast-2",
 
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,

@@ -38,8 +38,10 @@ carry neither, so a missing value drops its whole row rather than printing
 Stdlib only, so lambda/checker/ stays deployable with no bundling step.
 """
 
+import os
 from datetime import datetime, timezone
 from html import escape
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ----------------------------------------------------------------------------
 # Palette - kept here rather than inlined so the two mails cannot drift apart.
@@ -108,8 +110,49 @@ def region_label(code):
     return "%s (%s)" % (friendly, code) if friendly else str(code)
 
 
+def _display_zone():
+    """The zone alert times are printed in: the stack's displayTimezone.
+
+    This is the deployment default the dashboard also starts from. A viewer's
+    own pick on /settings lives in their browser and never reaches the checker.
+    An empty or unknown name falls back to UTC - a mail in the wrong zone beats
+    a checker that fails to import.
+    """
+    name = os.environ.get("DISPLAY_TIMEZONE", "").strip()
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        # Printed so a typo in displayTimezone shows up in CloudWatch rather
+        # than as mails that are quietly still in UTC.
+        print("DISPLAY_TIMEZONE %r not found; alert emails fall back to UTC" % name)
+        return timezone.utc
+
+
+DISPLAY_ZONE = _display_zone()
+
+
+def _zone_label(local):
+    """"AEST" where the zone has a real abbreviation, else "UTC+06:00".
+
+    Many tz database zones abbreviate to a bare offset like "+06", which reads
+    as noise in a mail, so those are spelled out as an offset from UTC.
+    """
+    abbrev = local.strftime("%Z")
+    if abbrev and abbrev[0] not in "+-" and not abbrev.isdigit():
+        return abbrev
+    offset = local.strftime("%z")  # "+0600"
+    if not offset:
+        return "UTC"
+    return "UTC%s:%s" % (offset[:3], offset[3:5])
+
+
 def human_time(value):
-    """An ISO8601 string (or datetime) as "08 Sep 2026, 14:02 UTC".
+    """An ISO8601 string (or datetime) as "08 Sep 2026, 14:02 AEST".
+
+    Rendered in DISPLAY_ZONE and always labelled with it, so the mail never
+    reads as a bare wall-clock time.
 
     Minute precision: the duration beside it carries the real resolution.
     Falls back to the raw value if it will not parse - an ugly timestamp in the
@@ -125,7 +168,12 @@ def human_time(value):
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except ValueError:
             return str(value)
-    return parsed.astimezone(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    # A naive value is UTC by this codebase's convention; without this,
+    # astimezone() would treat it as the Lambda host's local time.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone(DISPLAY_ZONE)
+    return "%s %s" % (local.strftime("%d %b %Y, %H:%M"), _zone_label(local))
 
 
 def _plural(count, unit):
@@ -184,7 +232,7 @@ def human_duration(seconds):
 
 
 def resolved_value(resolved, duration):
-    """"09 Sep 2026, 04:12 UTC (down for 13 minutes)" - duration optional."""
+    """"09 Sep 2026, 04:12 AEST (down for 13 minutes)" - duration optional."""
     if not resolved:
         return None
     if duration:

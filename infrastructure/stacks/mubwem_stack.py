@@ -121,7 +121,9 @@ class MubwemStack(Stack):
         # the schedule timezone rather than being configured twice: a deployment
         # that runs its checks on Sydney time is being watched from Sydney. This
         # is only a display default - the browser can override it per-user, and
-        # every timestamp on the wire stays ISO8601 UTC regardless.
+        # every timestamp on the wire stays ISO8601 UTC regardless. Alert emails
+        # use it too; the browser override lives in localStorage, which the
+        # checker cannot see.
         display_timezone = (
             self.node.try_get_context("displayTimezone") or schedule_timezone
         )
@@ -287,6 +289,7 @@ class MubwemStack(Stack):
                 "CHECK_TIMEOUT_SEC": str(check_timeout_sec),
                 "CHECKS_TTL_DAYS": str(checks_ttl_days),
                 "CHECK_REGION": Aws.REGION,
+                "DISPLAY_TIMEZONE": display_timezone,
             },
         )
 

@@ -139,7 +139,7 @@ Each card's countdown ring is drawn from `lastCheckedAt` plus `scheduleIntervalS
 
 The one exception on `/settings` is the **display timezone** picker, which is a real control because it is purely local. It decides how the browser renders timestamps — the incident table, the dashboard's incident feed and hourly-bar tooltips, the monitor response-time chart, and the `Started` column of the incidents CSV export. Every absolute time is labelled with its zone, so the same incident never reads as two different times depending on which page you opened it from.
 
-It changes nothing that is recorded. All three Lambdas write ISO8601 UTC with a trailing `Z` via an identical `_iso()` helper, and `UptimeChecks.checkedAt` and `Incidents.startedAt` are DynamoDB sort keys that depend on that fixed-width format sorting lexicographically. Alert emails stay UTC too — they are read outside the browser, where no preference exists.
+It changes nothing that is recorded. All three Lambdas write ISO8601 UTC with a trailing `Z` via an identical `_iso()` helper, and `UptimeChecks.checkedAt` and `Incidents.startedAt` are DynamoDB sort keys that depend on that fixed-width format sorting lexicographically. Alert emails are rendered in the deployment's `displayTimezone` (labelled with the zone), not the picker's choice — they are built by the checker Lambda, which cannot see a browser's `localStorage`. To get emails in your zone, set `MUBWEM_DISPLAY_TIMEZONE` and redeploy.
 
 Resolution is three layers, highest first: the viewer's choice in `localStorage` (`mubwem.timeZone`, including an explicit "browser local"), then `displayTimezone` from the generated `config.js`, then the browser's own zone. An unknown zone name — a stale saved value, or a typo in CDK context — falls back to browser local rather than throwing.
 
@@ -236,7 +236,7 @@ cp .env.example .env               # .env is gitignored
 | Check retention (days) | `MUBWEM_CHECKS_TTL_DAYS` | `checksTtlDays` | `30` |
 | Schedule | `MUBWEM_SCHEDULE_EXPRESSION` | `scheduleExpression` | `rate(1 minute)` |
 | Schedule timezone | `MUBWEM_SCHEDULE_TIMEZONE` | `scheduleTimezone` | `Australia/Sydney` |
-| Dashboard display timezone | `MUBWEM_DISPLAY_TIMEZONE` | `displayTimezone` | the schedule timezone |
+| Dashboard default + alert email timezone | `MUBWEM_DISPLAY_TIMEZONE` | `displayTimezone` | the schedule timezone |
 | Region | `MUBWEM_REGION` | `region` | `ap-southeast-2` |
 | Account | `MUBWEM_ACCOUNT` | `account` | `CDK_DEFAULT_ACCOUNT` |
 | Cognito domain prefix | — | `cognitoDomainPrefix` | derived from the stack id |

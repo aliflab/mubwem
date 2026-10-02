@@ -1,7 +1,7 @@
 """MuBWeM admin API Lambda.
 
 Behind the same API Gateway HTTP API and the same Cognito JWT authorizer as
-GET /status, serving nine routes from one function:
+GET /status, serving eleven routes from one function:
 
   GET    /admin/users             list users and their role
   POST   /admin/users             create a user in a role
@@ -13,6 +13,9 @@ GET /status, serving nine routes from one function:
   PATCH  /admin/sites/{siteId}    edit an allow-listed set of site fields
   DELETE /admin/sites/{siteId}    delete a site row
   POST   /admin/sites/preview     suggest a monitor name for a URL
+
+  GET    /admin/settings          read deployment-wide notification settings
+  PATCH  /admin/settings          mute or unmute alert email
 
 The last of those is the only route in this codebase that makes an outbound
 request to an address the caller chooses. It carries its own SSRF notice, in
@@ -38,7 +41,8 @@ results in access being granted.
 Roles:
 
   Admins   everything - manage users, and create/edit/delete sites
-  Editors  create and edit sites; no user management, no site deletion
+  Editors  create and edit sites, mute/unmute alert email; no user
+           management, no site deletion
   Viewers  the read-only dashboard, and nothing here - a Viewer has no reason
            to reach any /admin/* route, not even a read-only one
 
@@ -71,10 +75,12 @@ logger.setLevel(logging.INFO)
 
 SITES_TABLE = os.environ["SITES_TABLE"]
 USER_POOL_ID = os.environ["USER_POOL_ID"]
+SETTINGS_TABLE = os.environ["SETTINGS_TABLE"]
 
 _boto_config = Config(retries={"max_attempts": 3, "mode": "standard"})
 _dynamodb = boto3.resource("dynamodb", config=_boto_config)
 sites_table = _dynamodb.Table(SITES_TABLE)
+settings_table = _dynamodb.Table(SETTINGS_TABLE)
 cognito = boto3.client("cognito-idp", config=_boto_config)
 
 # Site fields a client is allowed to set. Everything else on a Sites item -
@@ -846,6 +852,71 @@ def _handle_delete_site(event):
 
 
 # ---------------------------------------------------------------------------
+# Settings routes
+# ---------------------------------------------------------------------------
+# The one row the checker reads at the start of every sweep. Same key there.
+NOTIFICATION_SETTINGS_KEY = "notifications"
+
+
+def _notification_settings(item):
+    """The response shape for the notifications row, missing or not.
+
+    A missing row means email is on - the same fail-open default the checker
+    applies, so this page can never show a state the checker disagrees with.
+    """
+    item = item or {}
+    return {
+        "emailAlertsEnabled": item.get("emailAlertsEnabled", True) is not False,
+        "updatedAt": item.get("updatedAt"),
+        "updatedBy": item.get("updatedBy"),
+    }
+
+
+def _handle_get_settings(event):
+    denied = _require(event, CAN_WRITE_SITES)
+    if denied:
+        return denied
+
+    item = settings_table.get_item(
+        Key={"settingKey": NOTIFICATION_SETTINGS_KEY}
+    ).get("Item")
+    return _response(200, _notification_settings(item))
+
+
+def _handle_update_settings(event):
+    # Muting is deployment-wide, but it changes who hears about an outage, not
+    # what gets monitored - the same weight as editing a site, so the same
+    # groups. Incidents keep opening and closing while it is off.
+    denied = _require(event, CAN_WRITE_SITES)
+    if denied:
+        return denied
+
+    enabled = _body(event).get("emailAlertsEnabled")
+    # A real JSON boolean only. "false" as a string is truthy, and guessing
+    # which way the caller meant it is how alerts get muted by accident.
+    if not isinstance(enabled, bool):
+        raise Invalid("emailAlertsEnabled is required and must be true or false")
+
+    updated_by = _caller(event).get("email") or _caller(event).get(
+        "cognito:username"
+    )
+    result = settings_table.update_item(
+        Key={"settingKey": NOTIFICATION_SETTINGS_KEY},
+        UpdateExpression=(
+            "SET emailAlertsEnabled = :enabled, updatedAt = :now, updatedBy = :by"
+        ),
+        ExpressionAttributeValues={
+            ":enabled": enabled,
+            ":now": _iso(datetime.now(timezone.utc)),
+            ":by": str(updated_by or "unknown"),
+        },
+        ReturnValues="ALL_NEW",
+    )
+    logger.info("Alert email %s by %s", "enabled" if enabled else "muted", updated_by)
+    return _response(200, _notification_settings(result.get("Attributes")))
+
+
+# ---------------------------------------------------------------------------
 # User routes
 # ---------------------------------------------------------------------------
 def _user_attribute(user, name):
@@ -1152,6 +1223,8 @@ ROUTES = {
     "PATCH /admin/sites/{siteId}": _handle_update_site,
     "DELETE /admin/sites/{siteId}": _handle_delete_site,
     "POST /admin/sites/preview": _handle_preview_site,
+    "GET /admin/settings": _handle_get_settings,
+    "PATCH /admin/settings": _handle_update_settings,
 }
 
 

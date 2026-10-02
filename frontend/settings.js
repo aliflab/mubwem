@@ -10,11 +10,15 @@
  * public — it is served to any browser that loads the dashboard. No secret is
  * displayed and none is available to display.
  *
- * The one exception is the display timezone. It is a genuine control because
+ * There are two exceptions. The display timezone is a genuine control because
  * it is genuinely local: it decides how this browser renders timestamps and
  * nothing more. Every check, incident and alert email is still recorded in
  * UTC, and the sort-key format on the wire is untouched. The deployment sets
  * the default via displayTimezone; this only overrides it for the viewer.
+ *
+ * The other is the alert-email mute on the Email channel row. That one is
+ * deployment-wide and stored server-side (GET/PATCH /admin/settings), and
+ * only Admins and Editors see the switch - see renderEmail().
  *
  * The design reference carried a "PRO MULTI-BRAND" plan block with an Upgrade
  * Plan button. There is no billing, no plan and no subscription anywhere in
@@ -60,9 +64,12 @@
     return row;
   }
 
-  function channelRow(iconName, name, detail, configured) {
+  /* One channel. state is "active", "muted", "off" (not configured) or null
+     - unknown, so no badge at all rather than a guess. Returns handles so the
+     Email row can be updated in place once its live state has loaded. */
+  function channelRow(iconName, name, detail, state) {
     var row = document.createElement("div");
-    row.className = "channel-row" + (configured ? "" : " channel-off");
+    row.className = "channel-row" + (state === "off" ? " channel-off" : "");
 
     var glyph = document.createElement("span");
     glyph.className = "channel-icon";
@@ -81,12 +88,90 @@
     text.appendChild(sub);
     row.appendChild(text);
 
+    var control = document.createElement("div");
+    control.className = "channel-control";
+    row.appendChild(control);
+
     var badge = document.createElement("span");
-    badge.className = "badge " + (configured ? "badge-up" : "badge-paused");
-    badge.textContent = configured ? "ACTIVE" : "NOT CONFIGURED";
     row.appendChild(badge);
 
-    return row;
+    function setState(next) {
+      badge.hidden = !next;
+      if (!next) return;
+      badge.className = "badge " + (next === "active" ? "badge-up" : "badge-paused");
+      badge.textContent =
+        next === "active" ? "ACTIVE" : next === "muted" ? "MUTED" : "NOT CONFIGURED";
+    }
+    setState(state);
+
+    return { row: row, detail: sub, control: control, setState: setState };
+  }
+
+  var EMAIL_DETAIL =
+    "One SES recipient, set at deploy time via alertEmail, with an SNS topic as the fallback.";
+
+  /* The Email row, with the deployment-wide mute switch for Admins and
+     Editors. The state lives in the Settings table, which the checker reads
+     at the start of every sweep, so a change takes effect within a minute.
+     Muting stops every alert email - SES and the SNS fallback alike - but
+     incidents still open and close and still show on the dashboard.
+
+     Viewers cannot read /admin/*, so for them the row makes no claim about
+     whether email is on: no badge beats a badge that might be wrong. */
+  function renderEmail(host) {
+    var email = channelRow("mail", "Email", EMAIL_DETAIL, null);
+    host.appendChild(email.row);
+
+    var adminBase = window.MUBWEM_ADMIN_API_URL || "";
+    if (!MubwemAuth.inAnyGroup(["Admins", "Editors"])) {
+      email.detail.textContent =
+        EMAIL_DETAIL + " Admins and Editors can mute alert email.";
+      return;
+    }
+    if (!adminBase) {
+      email.detail.textContent =
+        EMAIL_DETAIL + " Muting needs the admin API URL from config.js, which is missing.";
+      return;
+    }
+
+    function apply(settings) {
+      var on = settings.emailAlertsEnabled !== false;
+      email.setState(on ? "active" : "muted");
+      var note = on
+        ? EMAIL_DETAIL
+        : "Muted - incidents still open and close, but no alert email is sent by SES or SNS.";
+      if (settings.updatedAt) {
+        note +=
+          " Last changed " +
+          (settings.updatedBy ? "by " + settings.updatedBy + ", " : "") +
+          MubwemShell.relativeTime(settings.updatedAt) +
+          ".";
+      }
+      email.detail.textContent = note;
+    }
+
+    MubwemShell.apiFetch(adminBase + "/settings")
+      .then(function (settings) {
+        apply(settings);
+        email.control.appendChild(
+          MubwemShell.toggle(
+            settings.emailAlertsEnabled !== false,
+            function (on) {
+              MubwemShell.clearError();
+              return MubwemShell.apiFetch(adminBase + "/settings", {
+                method: "PATCH",
+                body: { emailAlertsEnabled: on }
+              }).then(apply);
+            },
+            "Email alerts"
+          )
+        );
+      })
+      .catch(function (err) {
+        MubwemShell.showError(
+          "Could not load notification settings: " + err.message
+        );
+      });
   }
 
   /* Like settingRow, but the right-hand side is a live control the caller
@@ -306,19 +391,12 @@
     );
 
     var channels = document.getElementById("channels");
-    channels.appendChild(
-      channelRow(
-        "mail",
-        "Email",
-        "One SES recipient, set at deploy time via alertEmail, with an SNS topic as the fallback.",
-        true
-      )
-    );
+    renderEmail(channels);
     // Kept visible and explicitly unconfigured, exactly as the reference
     // shows its own Slack row. Naming something that does not exist is only
     // dishonest if it claims to work.
     channels.appendChild(
-      channelRow("slack", "Slack", "No webhook support exists in this deployment.", false)
+      channelRow("slack", "Slack", "No webhook support exists in this deployment.", "off").row
     );
   }
 

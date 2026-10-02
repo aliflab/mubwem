@@ -15,6 +15,11 @@ unverified identity or a throttle must not cost an alert. Bounces and
 complaints cannot be seen from here at all; they are reported asynchronously
 to a separate SNS topic via the SES configuration set.
 
+Alert email can be muted from the dashboard's Settings page. The flag lives in
+the Settings table, is read once per sweep, and fails open: a missing row or a
+failed read means email is on. Muting suppresses both SES and the SNS fallback;
+incidents still open and close exactly as they would otherwise.
+
 Only the stdlib and boto3 are used, so the function needs no bundled deps.
 """
 
@@ -46,6 +51,7 @@ UPTIME_CHECKS_TABLE = os.environ["UPTIME_CHECKS_TABLE"]
 CURRENT_STATUS_TABLE = os.environ["CURRENT_STATUS_TABLE"]
 INCIDENTS_TABLE = os.environ["INCIDENTS_TABLE"]
 ALERT_TOPIC_ARN = os.environ["ALERT_TOPIC_ARN"]
+SETTINGS_TABLE = os.environ["SETTINGS_TABLE"]
 
 FAILURE_THRESHOLD = int(os.environ.get("FAILURE_THRESHOLD", "3"))
 CHECK_TIMEOUT_SEC = int(os.environ.get("CHECK_TIMEOUT_SEC", "8"))
@@ -76,6 +82,10 @@ sites_table = _dynamodb.Table(SITES_TABLE)
 checks_table = _dynamodb.Table(UPTIME_CHECKS_TABLE)
 status_table = _dynamodb.Table(CURRENT_STATUS_TABLE)
 incidents_table = _dynamodb.Table(INCIDENTS_TABLE)
+settings_table = _dynamodb.Table(SETTINGS_TABLE)
+
+# The one Settings row this function reads. Written by the admin API.
+NOTIFICATION_SETTINGS_KEY = "notifications"
 
 
 # ----------------------------------------------------------------------------
@@ -117,6 +127,25 @@ def load_enabled_sites():
     enabled = [s for s in sites if s.get("enabled", True)]
     logger.info("Loaded %d sites, %d enabled", len(sites), len(enabled))
     return enabled
+
+
+def load_email_enabled():
+    """Whether alert email is switched on for this sweep.
+
+    Fails open. An alert nobody meant to mute is a far worse outcome than one
+    extra email, so a missing row, a missing attribute or a failed read all
+    mean "on".
+    """
+    try:
+        item = settings_table.get_item(
+            Key={"settingKey": NOTIFICATION_SETTINGS_KEY}
+        ).get("Item")
+    except Exception:  # noqa: BLE001 - never let a settings read kill the sweep
+        logger.exception("Could not read notification settings; email stays on")
+        return True
+    if not item:
+        return True
+    return item.get("emailAlertsEnabled", True) is not False
 
 
 def check_site(site):
@@ -345,8 +374,13 @@ def send_alert(subject, text_body, html_body):
     publish_alert(subject, text_body)
 
 
-def handle_transitions(result, status_item, checked_at):
-    """Open or close incidents based on the freshly-written status row."""
+def handle_transitions(result, status_item, checked_at, email_enabled=True):
+    """Open or close incidents based on the freshly-written status row.
+
+    email_enabled only gates the send. The incident itself opens and closes
+    regardless, so dedup is unaffected: unmuting mid-outage sends no late DOWN
+    mail, but the RESOLVED mail does go out.
+    """
     site_id = result["siteId"]
     name = result["name"]
     failures = int(status_item.get("consecutiveFailures", 0))
@@ -356,6 +390,9 @@ def handle_transitions(result, status_item, checked_at):
         if failures >= FAILURE_THRESHOLD and open_inc is None:
             reason = result["error"] or "HTTP %s" % result["statusCode"]
             open_incident(result, checked_at, failures)
+            if not email_enabled:
+                logger.info("Email alerts muted; skipped DOWN alert for %s", site_id)
+                return "incident_opened"
             send_alert(
                 *email_templates.render_down(
                     {
@@ -373,6 +410,9 @@ def handle_transitions(result, status_item, checked_at):
 
     if open_inc is not None:
         duration = close_incident(open_inc, result, checked_at)
+        if not email_enabled:
+            logger.info("Email alerts muted; skipped RESOLVED alert for %s", site_id)
+            return "incident_closed"
         send_alert(
             *email_templates.render_recovered(
                 {
@@ -395,12 +435,12 @@ def handle_transitions(result, status_item, checked_at):
     return "up"
 
 
-def process_site(site):
+def process_site(site, email_enabled=True):
     checked_at = _iso(_now())
     result = check_site(site)
     record_check(result, checked_at)
     status_item = update_current_status(result, checked_at)
-    outcome = handle_transitions(result, status_item, checked_at)
+    outcome = handle_transitions(result, status_item, checked_at, email_enabled)
     return {
         "siteId": result["siteId"],
         "isUp": result["isUp"],
@@ -419,10 +459,14 @@ def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda
         logger.warning("No enabled sites found in %s", SITES_TABLE)
         return {"checked": 0, "results": []}
 
+    email_enabled = load_email_enabled()
+    if not email_enabled:
+        logger.info("Email alerts are muted for this sweep")
+
     results = []
     workers = min(MAX_PARALLEL_CHECKS, len(sites))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(process_site, s): s for s in sites}
+        futures = {pool.submit(process_site, s, email_enabled): s for s in sites}
         for future in concurrent.futures.as_completed(futures):
             site = futures[future]
             try:

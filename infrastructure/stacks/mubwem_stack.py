@@ -187,6 +187,18 @@ class MubwemStack(Stack):
             **common_table_kwargs,
         )
 
+        # Runtime settings changed from the dashboard. One row today
+        # (settingKey="notifications": the alert-email mute), written by the
+        # admin API and read by the checker once per sweep.
+        settings_table = dynamodb.Table(
+            self,
+            "SettingsTable",
+            partition_key=dynamodb.Attribute(
+                name="settingKey", type=dynamodb.AttributeType.STRING
+            ),
+            **common_table_kwargs,
+        )
+
         # ------------------------------------------------------------------
         # Alert delivery
         #
@@ -281,6 +293,7 @@ class MubwemStack(Stack):
                 "UPTIME_CHECKS_TABLE": uptime_checks_table.table_name,
                 "CURRENT_STATUS_TABLE": current_status_table.table_name,
                 "INCIDENTS_TABLE": incidents_table.table_name,
+                "SETTINGS_TABLE": settings_table.table_name,
                 "ALERT_TOPIC_ARN": alert_topic.topic_arn,
                 "ALERT_EMAIL": alert_email,
                 "SENDER_EMAIL": sender_email,
@@ -297,6 +310,7 @@ class MubwemStack(Stack):
         uptime_checks_table.grant(checker_fn, "dynamodb:PutItem")
         current_status_table.grant_read_write_data(checker_fn)
         incidents_table.grant_read_write_data(checker_fn)
+        settings_table.grant_read_data(checker_fn)
         alert_topic.grant_publish(checker_fn)
 
         # One SendEmail call, two resources to authorise. SES evaluates the
@@ -682,13 +696,15 @@ function handler(event) {
             role=admin_fn_role,
             environment={
                 "SITES_TABLE": sites_table.table_name,
+                "SETTINGS_TABLE": settings_table.table_name,
                 "USER_POOL_ID": user_pool.user_pool_id,
             },
         )
 
-        # Sites only. This function has no reason to read or write
-        # UptimeChecks, CurrentStatus or Incidents, so it cannot.
+        # Sites and Settings only. This function has no reason to read or
+        # write UptimeChecks, CurrentStatus or Incidents, so it cannot.
         sites_table.grant_read_write_data(admin_fn)
+        settings_table.grant_read_write_data(admin_fn)
 
         # Scoped to this pool's ARN, not "*": these actions on some other pool
         # in the account are not something this function should ever be able
@@ -736,6 +752,7 @@ function handler(event) {
                 "/admin/sites/{siteId}",
                 [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
             ),
+            ("/admin/settings", [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH]),
         ):
             http_api.add_routes(
                 path=admin_path,

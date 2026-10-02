@@ -494,6 +494,37 @@ window.MubwemShell = (function () {
     return node;
   }
 
+  /* The track-and-thumb switch for a setting that is saved the moment it is
+     flipped. onChange(checked) must return a promise: the switch is disabled
+     while it is pending and snaps back if it rejects, so the page never
+     claims a state the backend does not have. Used by the Monitors table and
+     the Settings page. */
+  function toggle(checked, onChange, label) {
+    var wrap = text("label", "toggle", null);
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(checked);
+    if (label) input.setAttribute("aria-label", label);
+    input.addEventListener("change", function () {
+      input.disabled = true;
+      onChange(input.checked).then(
+        function () {
+          input.disabled = false;
+        },
+        function (err) {
+          // The write failed, so put the switch back where it was rather than
+          // leaving the page claiming a state the table does not have.
+          input.checked = !input.checked;
+          input.disabled = false;
+          showError(err.message);
+        }
+      );
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(text("span", "toggle-track", null));
+    return wrap;
+  }
+
   /* The deploy-generated config.js sets the window globals. For local
      development, append ?api=https://... once and it is remembered in
      localStorage. Only the endpoint is ever stored there — never a token. */
@@ -524,6 +555,7 @@ window.MubwemShell = (function () {
     relativeTime: relativeTime,
     durationLabel: durationLabel,
     text: text,
+    toggle: toggle,
     resolveApiUrl: resolveApiUrl,
     attachNameDetection: attachNameDetection,
     timeZone: timeZone,

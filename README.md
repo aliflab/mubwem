@@ -20,9 +20,9 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 > topology: no Cognito, no JWT authorizer, no `AdminFunction`, and only three
 > pages hanging off CloudFront instead of eight.
 
-### The four tables
+### The five tables
 
-All four are on-demand (`PAY_PER_REQUEST`).
+All five are on-demand (`PAY_PER_REQUEST`).
 
 | Table | Keys | What it holds |
 |---|---|---|
@@ -30,6 +30,7 @@ All four are on-demand (`PAY_PER_REQUEST`).
 | **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — raw history, TTL-expired after 30 days |
 | **CurrentStatus** | PK `siteId` | `currentStatus`, `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
+| **Settings** | PK `settingKey` | one row, `notifications`: `emailAlertsEnabled`, `updatedAt`, `updatedBy` — the alert-email mute |
 
 ### Checker flow
 
@@ -49,6 +50,8 @@ Three consecutive failures is what stops a single flaky check from paging you. "
 Both mails are HTML, rendered by `lambda/checker/email_templates.py` and sent through **SES**: a coloured status banner, a field table, and a **View details** button deep-linking to that monitor's page. The `DOWN` mail carries name, URL, root cause, start time and location; `RESOLVED` adds resolution time and outage duration. Location is the region the check ran from, shown as a friendly name (`Sydney, Australia (ap-southeast-2)`).
 
 **SES first, SNS as the fallback.** SNS's `email` protocol is plain text only, so it cannot carry a designed mail. The topic is still wired up: if SES refuses a send, the checker publishes the plain-text version there rather than losing it. Every mail is rendered in both formats for that reason.
+
+**Muting alert email.** Admins and Editors can switch alert email off from the Email row on `/settings` (`PATCH /admin/settings`). The checker reads the flag once per sweep, so a change applies within a minute. Muted means no `DOWN` or `RESOLVED` mail by **any** path — SES and the SNS fallback alike — but incidents still open and close and still show on the dashboard. Because the incident still opens while muted, unmuting mid-outage sends no late `DOWN` mail; the `RESOLVED` one does go out. The flag **fails open**: a missing row or a failed read means email is on.
 
 **Bounce and complaint detection.** `send_email` returning a `MessageId` means SES accepted the mail, not that it was delivered — a typo'd domain is accepted and hard-bounces minutes later, with nothing to fall back on. A **SES configuration set**, attached to the sender identity and named on every send, forwards `bounce` and `complaint` events to a separate SNS topic (`DeliveryFailureTopicArn`). `delivery` events are deliberately not subscribed. The SNS topic policy scopes SES's publish rights by `aws:SourceAccount` and by this configuration set's ARN.
 
@@ -89,12 +92,14 @@ A site with `enabled: false` reports `status: "paused"` rather than its last rec
 | `POST /admin/sites/preview` | Editor | suggest a monitor name by reading a URL's page title |
 | `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled` |
 | `DELETE /admin/sites/{siteId}` | **Admin** | delete the Sites row |
+| `GET /admin/settings` | Editor | read the alert-email mute (`emailAlertsEnabled`, who changed it, when) |
+| `PATCH /admin/settings` | Editor | set `emailAlertsEnabled` to `true` or `false` |
 | `GET /admin/users` | **Admin** | list users and their role |
 | `POST /admin/users` | **Admin** | create a user in a role |
 | `PATCH /admin/users/{username}` | **Admin** | change role, enable/disable |
 | `DELETE /admin/users/{username}` | **Admin** | delete a user |
 
-Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` has its own IAM role — read/write on **Sites only**, plus `cognito-idp` actions scoped to this user pool's ARN.
+Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` has its own IAM role — read/write on **Sites and Settings only**, plus `cognito-idp` actions scoped to this user pool's ARN.
 
 `POST /admin/sites/preview` is the only place in the codebase that makes an outbound request to a caller-supplied address, so it carries a full SSRF defence: `https://` only, every resolved address checked against reserved ranges, the socket pinned to the address that passed (SNI and certificate verification stay on the hostname, which is what defeats DNS rebinding), IPv4-mapped/6to4/Teredo unwrapping, per-socket timeouts plus a whole-request deadline, re-validation of every redirect hop, a hard read cap, and stdlib `html.parser` reading two tags. Every failure — blocked, refused, timed out, 404, no title — returns the same hostname fallback so the endpoint is not an oracle. **Read the SSRF notice at the top of that section before changing anything in it.**
 
@@ -122,7 +127,7 @@ A persistent side navigation (`nav.js`) is shared by every page. **Monitors** an
 | `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
 | `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`. |
 | `/team` | Admins | User management. |
-| `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker. |
+| `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker and (Admins, Editors) an alert-email mute switch. |
 | `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
 
 The dashboard toolbar filters the `/status` document the page is **already** polling — no request, no backend change, and so no `?q=` or `?status=` parameter on any route. Filtering never re-sorts: the API returns sites down-first then by name, and that ordering survives every filter. The summary cards always describe the whole deployment, with a "Showing 3 of 8 monitors" line making the filtered subset explicit. Status filter and density persist in `localStorage`; search text does not.
@@ -137,7 +142,7 @@ Each card's countdown ring is drawn from `lastCheckedAt` plus `scheduleIntervalS
 
 `/settings` and `/integrations` are **placeholders, shipped as placeholders**, and say so on the page. There is nothing behind them yet: alerting is one SES sender and one recipient fixed at deploy time, and there are no webhooks, API keys or third-party targets.
 
-The one exception on `/settings` is the **display timezone** picker, which is a real control because it is purely local. It decides how the browser renders timestamps — the incident table, the dashboard's incident feed and hourly-bar tooltips, the monitor response-time chart, and the `Started` column of the incidents CSV export. Every absolute time is labelled with its zone, so the same incident never reads as two different times depending on which page you opened it from.
+The exceptions on `/settings` are the alert-email mute (see [Alerting](#alerting)) and the **display timezone** picker, which is a real control because it is purely local. It decides how the browser renders timestamps — the incident table, the dashboard's incident feed and hourly-bar tooltips, the monitor response-time chart, and the `Started` column of the incidents CSV export. Every absolute time is labelled with its zone, so the same incident never reads as two different times depending on which page you opened it from.
 
 It changes nothing that is recorded. All three Lambdas write ISO8601 UTC with a trailing `Z` via an identical `_iso()` helper, and `UptimeChecks.checkedAt` and `Incidents.startedAt` are DynamoDB sort keys that depend on that fixed-width format sorting lexicographically. Alert emails are rendered in the deployment's `displayTimezone` (labelled with the zone), not the picker's choice — they are built by the checker Lambda, which cannot see a browser's `localStorage`. To get emails in your zone, set `MUBWEM_DISPLAY_TIMEZONE` and redeploy.
 

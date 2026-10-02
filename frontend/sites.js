@@ -51,31 +51,6 @@
     });
   }
 
-  function toggle(checked, onChange) {
-    var wrap = text("label", "toggle", null);
-    var input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(checked);
-    input.addEventListener("change", function () {
-      input.disabled = true;
-      onChange(input.checked).then(
-        function () {
-          input.disabled = false;
-        },
-        function (err) {
-          // The write failed, so put the switch back where it was rather than
-          // leaving the page claiming a state the table does not have.
-          input.checked = !input.checked;
-          input.disabled = false;
-          MubwemShell.showError(err.message);
-        }
-      );
-    });
-    wrap.appendChild(input);
-    wrap.appendChild(text("span", "toggle-track", null));
-    return wrap;
-  }
-
   function patchSite(siteId, fields) {
     MubwemShell.clearError();
     return api("PATCH", "/sites/" + encodeURIComponent(siteId), fields);
@@ -105,7 +80,7 @@
 
     var enabledCell = text("td", null, null);
     enabledCell.appendChild(
-      toggle(site.enabled, function (value) {
+      MubwemShell.toggle(site.enabled, function (value) {
         return patchSite(site.siteId, { enabled: value }).then(function () {
           MubwemShell.showNotice(
             site.name + " is now " + (value ? "enabled" : "paused") + "."

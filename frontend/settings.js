@@ -378,7 +378,7 @@
     thresholds.appendChild(
       settingRow(
         "Failure threshold",
-        "How many checks must fail in a row before an incident opens and an alert is sent. Also the line between an amber hour and a red one on the status bars.",
+        "How many checks must fail in a row before an incident opens, the monitor shows as down and an alert is sent. A shorter run is an isolated failure: an amber hour on the status bars, and not counted against uptime.",
         threshold, " consecutive failures"
       )
     );

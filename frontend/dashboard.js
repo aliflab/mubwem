@@ -330,7 +330,7 @@ window.MubwemDashboard = (function () {
       return "recorded incident (" + threshold + "+ consecutive failures)";
     }
     if (state === "warn") {
-      return "a check failed, but not enough in a row to reach the incident threshold";
+      return "a check failed, but not enough in a row to reach the incident threshold - not counted as downtime";
     }
     if (state === "up") return "all checks succeeded";
     return "no checks recorded";
@@ -340,8 +340,9 @@ window.MubwemDashboard = (function () {
 
      The buckets are computed server-side (hourly_buckets() in the API) over
      the same 24h of checks the uptime percentage uses, so the bar and the
-     percentage under it always describe the same window. A bar is red if any
-     check in that hour failed, grey if no check was recorded at all. */
+     percentage under it always describe the same window. A bar is red if the
+     hour was part of an incident, amber for an isolated failure (which does
+     not lower the percentage), grey if no check was recorded at all. */
   function renderHourlyBar(site, large, threshold) {
     var buckets = site.hourlyBuckets || [];
     var limit = threshold || failureThreshold;

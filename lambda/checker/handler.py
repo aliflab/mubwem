@@ -4,7 +4,8 @@ Runs once a minute from EventBridge Scheduler. For every enabled site it:
 
   1. issues an HTTPS GET and records status code + response time,
   2. appends a row to UptimeChecks (TTL'd after CHECKS_TTL_DAYS),
-  3. updates CurrentStatus (consecutiveFailures up on failure, 0 on success),
+  3. updates CurrentStatus (consecutiveFailures up on failure, 0 on success;
+     currentStatus turns "down" only once FAILURE_THRESHOLD is reached),
   4. opens an Incident + sends a DOWN alert once consecutiveFailures reaches
      FAILURE_THRESHOLD, and closes the open Incident + sends a RESOLVED alert
      on the first success afterwards.
@@ -211,7 +212,14 @@ def record_check(result, checked_at):
 
 
 def update_current_status(result, checked_at):
-    """Atomically bump/reset consecutiveFailures and return the new state."""
+    """Atomically bump/reset consecutiveFailures and return the new state.
+
+    A failure does not by itself make a site "down". currentStatus is left as
+    it was until consecutiveFailures reaches FAILURE_THRESHOLD - the same
+    moment an incident opens - so an isolated blip never shows as an outage.
+    The counter is still bumped in one atomic expression; flipping to "down"
+    is a second, idempotent write made only on the check that crosses the line.
+    """
     if result["isUp"]:
         update = (
             "SET currentStatus = :status, lastCheckedAt = :now, "
@@ -228,15 +236,17 @@ def update_current_status(result, checked_at):
             ":url": result["url"],
         }
     else:
+        # Up stays up, down stays down, and a site that has never succeeded
+        # is "unknown" rather than "up" - nothing has shown it working yet.
         update = (
-            "SET currentStatus = :status, lastCheckedAt = :now, "
-            "lastResponseTimeMs = :rt, "
+            "SET currentStatus = if_not_exists(currentStatus, :status), "
+            "lastCheckedAt = :now, lastResponseTimeMs = :rt, "
             "consecutiveFailures = if_not_exists(consecutiveFailures, :zero) + :one, "
             "lastStatusChangeAt = if_not_exists(lastStatusChangeAt, :now), "
             "siteName = :name, siteUrl = :url"
         )
         values = {
-            ":status": "down",
+            ":status": "unknown",
             ":now": checked_at,
             ":rt": Decimal(result["responseTimeMs"]),
             ":zero": 0,
@@ -251,7 +261,21 @@ def update_current_status(result, checked_at):
         ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
-    return response["Attributes"]
+    attributes = response["Attributes"]
+
+    if (
+        not result["isUp"]
+        and int(attributes.get("consecutiveFailures", 0)) >= FAILURE_THRESHOLD
+        and attributes.get("currentStatus") != "down"
+    ):
+        status_table.update_item(
+            Key={"siteId": result["siteId"]},
+            UpdateExpression="SET currentStatus = :down",
+            ExpressionAttributeValues={":down": "down"},
+        )
+        attributes["currentStatus"] = "down"
+
+    return attributes
 
 
 def find_open_incident(site_id):

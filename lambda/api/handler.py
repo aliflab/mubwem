@@ -36,7 +36,7 @@ LIST RESPONSE (GET /status)
       "lastResponseTimeMs":  312 | null,
       "consecutiveFailures": 0,
       "lastStatusChangeAt":  "2026-08-26T22:01:10.004Z" | null,
-      "uptime24h":           99.86 | null,   # percent of checks up, 2dp
+      "uptime24h":           99.86 | null,   # percent of checks not in an incident, 2dp
       "checks24h":           1437,           # sample size behind uptime24h
       "hourlyBuckets":       ["up", "warn", "down", "none", ...],  # exactly 24
       "incidents": [                          # newest first, max 5
@@ -73,9 +73,12 @@ A run is marked from its beginning once it reaches the threshold, not from the
 check that crossed it, so the red span is the true length of the outage. See
 incident_level_checks() for the algorithm and its one known edge case.
 
-This is a display distinction only. `uptime24h` remains the plain percentage
-of individual checks that succeeded and is not affected by which bucket colour
-an hour ends up with.
+`uptime24h` uses the same definition. A failed check counts against it only
+when it belongs to a run of FAILURE_THRESHOLD or more consecutive failures -
+an isolated failure (a "warn" hour) is not downtime and leaves the percentage
+untouched. A failing run still in progress below the threshold counts as up
+until it crosses it, at which point the whole run counts as down from its
+first check - the same retroactive marking the bar uses.
 
 DETAIL RESPONSE (GET /status/{siteId})
 
@@ -252,12 +255,20 @@ def check_history(site_id, include_response_time=False):
     return items
 
 
-def uptime_from(checks):
-    """(percent up, sample size, up count) over an already-fetched check list."""
+def uptime_from(checks, flags=None):
+    """(percent up, sample size, up count) over an already-fetched check list.
+
+    Only checks that belong to a confirmed outage count as down - `flags` is
+    incident_level_checks() for the same list, computed here if not passed.
+    An isolated failure that never reached FAILURE_THRESHOLD is not downtime
+    by this app's definition, so it does not lower the percentage.
+    """
     total = len(checks)
     if total == 0:
         return None, 0, 0
-    up = sum(1 for item in checks if item.get("isUp"))
+    if flags is None:
+        flags = incident_level_checks(checks)
+    up = total - sum(1 for flag in flags if flag)
     return round(up * 100.0 / total, 2), total, up
 
 
@@ -326,7 +337,7 @@ def incident_level_checks(checks, threshold=None):
 _BUCKET_RANK = {"none": 0, "up": 1, "warn": 2, "down": 3}
 
 
-def hourly_buckets(checks, now, threshold=None):
+def hourly_buckets(checks, now, threshold=None, flags=None):
     """24 one-hour buckets over the last 24 hours, oldest first.
 
     The buckets are *rolling*, anchored on `now` rather than aligned to clock
@@ -351,11 +362,12 @@ def hourly_buckets(checks, now, threshold=None):
     the rest of the system means by an incident, and left an operator no way to
     tell a one-minute wobble from a twenty-minute outage.
 
-    Note this changes only the bar. uptime24h is still the plain share of
-    individual checks that succeeded, computed in uptime_from(), and a "warn"
-    hour lowers it exactly as much as it always did.
+    uptime_from() uses the same flags, so a "warn" hour does not lower
+    uptime24h and a "down" hour does. Pass `flags` to reuse a list already
+    computed for `checks`.
     """
-    flags = incident_level_checks(checks, threshold)
+    if flags is None:
+        flags = incident_level_checks(checks, threshold)
 
     buckets = ["none"] * HOURLY_BUCKETS
     for index, item in enumerate(checks):
@@ -385,7 +397,10 @@ def hourly_buckets(checks, now, threshold=None):
 def site_entry(site, status, checks, now, incident_limit=INCIDENTS_PER_SITE):
     """One site's list entry, assembled from data already fetched."""
     site_id = site["siteId"]
-    pct, sample, up_count = uptime_from(checks)
+    # One pass decides which failures are real outages; the percentage and the
+    # bar both read it, so they cannot disagree about what counted.
+    flags = incident_level_checks(checks)
+    pct, sample, up_count = uptime_from(checks, flags)
     paused = _is_paused(site)
 
     return {
@@ -406,7 +421,7 @@ def site_entry(site, status, checks, now, incident_limit=INCIDENTS_PER_SITE):
         "lastStatusChangeAt": status.get("lastStatusChangeAt"),
         "uptime24h": pct,
         "checks24h": sample,
-        "hourlyBuckets": hourly_buckets(checks, now),
+        "hourlyBuckets": hourly_buckets(checks, now, flags=flags),
         "incidents": recent_incidents(site_id, limit=incident_limit),
         # Not part of the response - stripped by the callers below, after the
         # summary has used it.

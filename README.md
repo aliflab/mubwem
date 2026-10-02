@@ -39,7 +39,7 @@ All five are on-demand (`PAY_PER_REQUEST`).
 1. Scans **Sites** and keeps the enabled ones.
 2. Checks each in parallel (up to 10 at a time) with an HTTPS GET, timeout from `checkTimeoutSec`. `2xx`/`3xx` is up; anything else — timeout, DNS failure, TLS error — is down.
 3. Writes an **UptimeChecks** row with a 30-day TTL.
-4. Updates **CurrentStatus** in one atomic expression: `consecutiveFailures + 1` on failure, `0` on success.
+4. Updates **CurrentStatus** in one atomic expression: `consecutiveFailures + 1` on failure, `0` on success. A failure leaves `currentStatus` as it was; it flips to `down` only on the check that reaches the threshold (a second, idempotent write), so an isolated blip never shows the site as down.
 5. When `consecutiveFailures` reaches the threshold (default **3**) **and** no incident is already open, opens an **Incident** and sends a `DOWN` alert.
 6. On the first success after an open incident, closes it (`endedAt`, `durationSec`, `resolved`) and sends a `RESOLVED` alert.
 
@@ -75,7 +75,7 @@ Both sit behind the Cognito JWT authorizer. The list route carries a top-level `
 | `up` | green | checks ran and all passed |
 | `none` | grey | no check this hour (paused, or the site did not exist yet) |
 
-Colouring *any* failure red made red mean "a blip happened", which is not what the rest of the system means by an incident. A run is marked from its **first** failure once it reaches the threshold, so the red span is the true outage length — which means the bar can go red slightly before the matching `Incidents` row's `startedAt`, that being the moment of confirmation. See `incident_level_checks()` for the algorithm and its one edge case (a run beginning before the 24h window). This is display only; `uptime24h` remains the plain share of checks that succeeded.
+Colouring *any* failure red made red mean "a blip happened", which is not what the rest of the system means by an incident. A run is marked from its **first** failure once it reaches the threshold, so the red span is the true outage length — which means the bar can go red slightly before the matching `Incidents` row's `startedAt`, that being the moment of confirmation. See `incident_level_checks()` for the algorithm and its one edge case (a run beginning before the 24h window). `uptime24h` uses the same marking: only checks inside a run that reached the threshold count as downtime, so an isolated failure (an amber hour) does not lower it. A run still below the threshold at the end of the window counts as up until it crosses the line, then counts as down from its first failure.
 
 The detail route adds the raw 24h check series for the response-time graph — thinned by regular-interval sampling to at most 500 points, never truncated — plus up to 50 incidents.
 

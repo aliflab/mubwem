@@ -136,60 +136,14 @@ window.MubwemShell = (function () {
 
   // --------------------------------------------------- monitor form helpers
   /* Shared by add-monitor.js and the edit form in monitor.js, so "Detect from
-     URL" and the brand suggestions behave identically in both places.
+     URL" behaves identically in both places.
 
-     Both are conveniences and neither is ever load-bearing. Detection can
+     It is a convenience and never load-bearing. Detection can
      fail for a dozen ordinary reasons — the site is slow, it has no <title>,
      it sits behind a WAF that dislikes robots — so nothing here disables an
      input, blocks a submit, or overwrites something the user typed. The name
      field stays a plain, always-editable text input whether detection runs,
      fails, or is never invoked at all. */
-
-  /* Distinct brands across the sites list, sorted, blanks dropped. Real data
-     from the deployment, not a guessed vocabulary — the field stays free text
-     so a brand nobody has used yet can still be typed. */
-  function distinctBrands(sites) {
-    var seen = Object.create(null);
-    (sites || []).forEach(function (site) {
-      var brand = (site && site.brand ? String(site.brand) : "").trim();
-      if (brand && brand !== "Unassigned") seen[brand] = true;
-    });
-    return Object.keys(seen).sort(function (a, b) {
-      return a.toLowerCase().localeCompare(b.toLowerCase());
-    });
-  }
-
-  /* Points `input` at a <datalist> of the brands already in use. Native HTML
-     autocomplete: no dependency, no custom dropdown, and the field is still a
-     text input that accepts anything. A failed fetch leaves the field exactly
-     as it was — an empty datalist simply offers no suggestions. */
-  function attachBrandSuggestions(input, adminBase, listId) {
-    if (!input || !adminBase) return Promise.resolve([]);
-
-    var list = document.getElementById(listId);
-    if (!list) {
-      list = document.createElement("datalist");
-      list.id = listId;
-      document.body.appendChild(list);
-    }
-    input.setAttribute("list", listId);
-
-    return apiFetch(adminBase + "/sites")
-      .then(function (payload) {
-        var brands = distinctBrands(payload && payload.sites);
-        list.innerHTML = "";
-        brands.forEach(function (brand) {
-          var option = document.createElement("option");
-          option.value = brand;
-          list.appendChild(option);
-        });
-        return brands;
-      })
-      .catch(function () {
-        /* No suggestions, then. The field works the same way without them. */
-        return [];
-      });
-  }
 
   /* Wires a "Detect from URL" button and a blur handler onto a URL field.
      opts: { urlInput, nameInput, button, status, adminBase }
@@ -571,8 +525,6 @@ window.MubwemShell = (function () {
     durationLabel: durationLabel,
     text: text,
     resolveApiUrl: resolveApiUrl,
-    distinctBrands: distinctBrands,
-    attachBrandSuggestions: attachBrandSuggestions,
     attachNameDetection: attachNameDetection,
     timeZone: timeZone,
     setTimeZone: setTimeZone,

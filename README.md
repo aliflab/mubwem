@@ -26,7 +26,7 @@ All four are on-demand (`PAY_PER_REQUEST`).
 
 | Table | Keys | What it holds |
 |---|---|---|
-| **Sites** | PK `siteId` | `name`, `url`, `brand`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list |
+| **Sites** | PK `siteId` | `name`, `url`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list |
 | **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — raw history, TTL-expired after 30 days |
 | **CurrentStatus** | PK `siteId` | `currentStatus`, `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
@@ -87,7 +87,7 @@ A site with `enabled: false` reports `status: "paused"` rather than its last rec
 | `GET /admin/sites` | Editor | every site, admin view |
 | `POST /admin/sites` | Editor | create a site (starts disabled) |
 | `POST /admin/sites/preview` | Editor | suggest a monitor name by reading a URL's page title |
-| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `brand`, `checkIntervalSec`, `enabled` |
+| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled` |
 | `DELETE /admin/sites/{siteId}` | **Admin** | delete the Sites row |
 | `GET /admin/users` | **Admin** | list users and their role |
 | `POST /admin/users` | **Admin** | create a user in a role |
@@ -116,16 +116,16 @@ A persistent side navigation (`nav.js`) is shared by every page. **Monitors** an
 
 | Page | Who | What |
 |---|---|---|
-| `/` | any signed-in user | Toolbar (search, status, brand, density) over two summary cards and a monitor grid. Each card: status badge, countdown ring, 24-bar hourly history, 24h uptime. |
+| `/` | any signed-in user | Toolbar (search, status, density) over two summary cards and a monitor grid. Each card: status badge, countdown ring, 24-bar hourly history, 24h uptime. |
 | `/monitor?site=<siteId>` | any signed-in user | One monitor: large hourly bar, detail stats, a Chart.js 24h response-time graph, up to 50 incidents. Admins and Editors also get an **Edit** form; a Viewer sees no edit control at all, not a disabled one. |
 | `/incidents` | any signed-in user | Cross-site incident list, newest first, filterable by monitor. |
 | `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
-| `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`; Brand autocompletes from brands already in use. |
+| `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`. |
 | `/team` | Admins | User management. |
 | `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker. |
 | `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
 
-The dashboard toolbar filters the `/status` document the page is **already** polling — no request, no backend change, and so no `?q=` or `?status=` parameter on any route. Filtering never re-sorts: the API returns sites down-first then by name, and that ordering survives every filter. The summary cards always describe the whole deployment, with a "Showing 3 of 8 monitors" line making the filtered subset explicit. Status filter and density persist in `localStorage`; search text and brand do not.
+The dashboard toolbar filters the `/status` document the page is **already** polling — no request, no backend change, and so no `?q=` or `?status=` parameter on any route. Filtering never re-sorts: the API returns sites down-first then by name, and that ordering survives every filter. The summary cards always describe the whole deployment, with a "Showing 3 of 8 monitors" line making the filtered subset explicit. Status filter and density persist in `localStorage`; search text does not.
 
 Each card's countdown ring is drawn from `lastCheckedAt` plus `scheduleIntervalSec` (published in the generated `config.js`) and ticks once a second. It is an **approximation** — the browser gets no live signal from EventBridge.
 

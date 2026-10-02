@@ -29,7 +29,6 @@ LIST RESPONSE (GET /status)
       "siteId":              "example-home",
       "name":                "Example Home",
       "url":                 "https://example.com",
-      "brand":               "Example Brand",
       "status":              "up" | "down" | "paused" | "unknown",
       "enabled":             true,
       "checkIntervalSec":    60,
@@ -393,7 +392,6 @@ def site_entry(site, status, checks, now, incident_limit=INCIDENTS_PER_SITE):
         "siteId": site_id,
         "name": site.get("name", site_id),
         "url": site.get("url"),
-        "brand": site.get("brand", "Unassigned"),
         # On every route, not just the detail one. The dashboard draws each
         # card's countdown ring from this; without it every ring fell back to
         # the global schedule interval and a 30s site counted down from 60.

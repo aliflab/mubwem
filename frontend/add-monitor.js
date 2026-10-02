@@ -3,12 +3,10 @@
  * Submits to the existing POST /admin/sites — the same request /sites's
  * inline form used to make, on a page with room to explain each field.
  *
- * Two conveniences sit on top, both wired in shell.js so the edit form on
- * /monitor behaves identically: "Detect name" asks
- * POST /admin/sites/preview for a name read off the page's own title, and the
- * Brand field suggests from brands already in use. Only the name is detected
- * from the site — "brand" is this app's own grouping and no webpage knows it.
- * Neither can block submission; both fields stay ordinary text inputs.
+ * One convenience sits on top, wired in shell.js so the edit form on
+ * /monitor behaves identically: "Detect name" asks POST /admin/sites/preview
+ * for a name read off the page's own title. It cannot block submission; the
+ * name field stays an ordinary text input.
  *
  * The design reference put an "Advanced Options" box here offering keyword
  * monitoring, SSL certificate validation and custom HTTP headers. None of
@@ -36,7 +34,6 @@
     checks: document.getElementById("m-checks"),
     submit: document.getElementById("m-submit"),
     name: document.getElementById("m-name"),
-    brand: document.getElementById("m-brand"),
     url: document.getElementById("m-url"),
     detect: document.getElementById("m-detect"),
     detectStatus: document.getElementById("m-detect-status")
@@ -86,8 +83,6 @@
       checkIntervalSec: Number(form.elements.checkIntervalSec.value) || MIN_INTERVAL_SEC,
       enabled: form.elements.enabled.checked
     };
-    var brand = form.elements.brand.value.trim();
-    if (brand) body.brand = brand;
 
     if (!body.name) {
       MubwemShell.showError("A name is required.");
@@ -164,7 +159,6 @@
         status: el.detectStatus,
         adminBase: ADMIN_BASE
       });
-      MubwemShell.attachBrandSuggestions(el.brand, ADMIN_BASE, "brand-options");
     }
   }).catch(function () {
     /* shell.js has already put the message on the page. */

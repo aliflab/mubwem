@@ -103,7 +103,6 @@ def to_item(site, now_iso):
         "siteId": str(site["siteId"]),
         "name": str(site["name"]),
         "url": str(site["url"]),
-        "brand": str(site.get("brand", "Unassigned")),
         "checkIntervalSec": int(site.get("checkIntervalSec", 60)),
         "enabled": bool(site.get("enabled", True)),
         # Preserved on re-seed by the conditional write below.

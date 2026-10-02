@@ -92,7 +92,6 @@ h1, h2, h3 {
 .stats dd,
 .incident-when,
 .seg-count,
-.chip-count,
 .ring-label,
 .code-block,
 .metric-value {
@@ -129,7 +128,6 @@ a:focus-visible {
 .hourbar-scale,
 .admin-table th,
 .config-list dt,
-.brand-label,
 .monitor-list-head,
 .section-label {
   font-family: var(--font-body);
@@ -596,8 +594,6 @@ footer a { color: var(--muted); }
   text-overflow: ellipsis;
 }
 
-.brand-label { margin: 2px 0 0; }
-
 .dot {
   width: 9px;
   height: 9px;
@@ -898,7 +894,7 @@ span.card-url:hover { text-decoration: none; }
 .summary-side .sumstat-value-empty { font-size: 11px; white-space: normal; }
 
 /* ==========================================================================
-   Toolbar: search, status segments, brand chips, density
+   Toolbar: search, status segments, density
    ========================================================================== */
 .toolbar { display: flex; flex-direction: column; gap: 11px; margin-bottom: 18px; }
 
@@ -979,38 +975,7 @@ span.card-url:hover { text-decoration: none; }
 .seg-count:empty { display: none; }
 .seg-on .seg-count { background: rgba(255, 255, 255, 0.22); color: #fff; }
 
-.chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-
-.chip {
-  font: inherit;
-  font-size: 12.5px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--muted);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.chip:hover:not(.chip-on) { border-color: var(--muted); color: var(--text); }
-
-.chip-on {
-  background: rgba(99, 102, 241, 0.16);
-  border-color: rgba(99, 102, 241, 0.5);
-  color: #c7d2fe;
-  font-weight: 600;
-}
-
-.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-.chip-count { font-size: 10.5px; opacity: 0.8; }
-
 @media (max-width: 640px) {
-  .chip-row { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
   .search-wrap { max-width: none; }
 }
 

@@ -49,22 +49,11 @@
           </p>
 
           <form id="add-form" autocomplete="off" class="form-grid">
-            <div class="field">
+            <div class="field field-wide">
               <label for="m-name">Name</label>
               <input id="m-name" name="name" type="text" required
                      placeholder="Example Home" maxlength="200">
               <small class="field-help">Shown on the dashboard card and in alerts.</small>
-            </div>
-
-            <div class="field">
-              <label for="m-brand">Brand</label>
-              <input id="m-brand" name="brand" type="text" list="brand-options"
-                     placeholder="Example Brand" maxlength="120">
-              <datalist id="brand-options"></datalist>
-              <small class="field-help">
-                Groups the monitor into a filter chip. Optional — suggestions are
-                brands already in use, but any text is accepted.
-              </small>
             </div>
 
             <div class="field field-wide">

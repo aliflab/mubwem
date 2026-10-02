@@ -17,7 +17,7 @@
  *
  * FILTERING
  *
- * The toolbar (search, status, brand, density) filters the payload that has
+ * The toolbar (search, status, density) filters the payload that has
  * already been fetched. It issues no request of its own and needs no backend
  * support: everything it works on is in the one /status document the page was
  * already polling. Filtering never re-sorts — the API returns sites down-first
@@ -49,7 +49,7 @@ window.MubwemDashboard = (function () {
   // so the tooltip wording cannot drift from the rule that produced the bar.
   var failureThreshold = 3;
 
-  var filters = { query: "", status: "all", brand: "all", density: "cards" };
+  var filters = { query: "", status: "all", density: "cards" };
   var VIEW_KEY = "mubwem.dashboardView";
   var SEARCH_DEBOUNCE_MS = 120;
 
@@ -101,10 +101,6 @@ window.MubwemDashboard = (function () {
       : site.uptime24h.toFixed(2) + "%";
   }
 
-  function brandOf(site) {
-    return site.brand || "Unassigned";
-  }
-
   function text(tag, className, value) {
     var node = document.createElement(tag);
     if (className) node.className = className;
@@ -141,8 +137,7 @@ window.MubwemDashboard = (function () {
   }
 
   /* Remembered view state: the status filter and the density, nothing else.
-     Not the search text (stale and confusing on return) and not the brand (the
-     brand set changes as monitors are added). Same rule as the API URL above —
+     Not the search text (stale and confusing on return). Same rule as the API URL above —
      view preferences only, never anything sensitive. */
   function loadView() {
     var saved;
@@ -466,7 +461,6 @@ window.MubwemDashboard = (function () {
     title.appendChild(text("span", "dot", null));
     var names = text("div", "card-names");
     names.appendChild(text("h2", null, site.name));
-    names.appendChild(text("p", "brand-label", brandOf(site)));
     title.appendChild(names);
     head.appendChild(title);
 
@@ -503,7 +497,6 @@ window.MubwemDashboard = (function () {
     name.appendChild(text("span", "dot", null));
     var names = text("div", "row-names");
     names.appendChild(text("span", "row-title", site.name));
-    names.appendChild(text("span", "brand-label", brandOf(site)));
     name.appendChild(names);
     row.appendChild(name);
 
@@ -657,7 +650,7 @@ window.MubwemDashboard = (function () {
   }
 
   function buildToolbar() {
-    var nodes = { statusGroup: {}, densityGroup: {}, brandButtons: {} };
+    var nodes = { statusGroup: {}, densityGroup: {} };
 
     var row = text("div", "toolbar-row");
 
@@ -672,7 +665,7 @@ window.MubwemDashboard = (function () {
     search.type = "search";
     search.className = "toolbar-search";
     search.placeholder = "Search monitors…";
-    search.setAttribute("aria-label", "Search monitors by name, URL or brand");
+    search.setAttribute("aria-label", "Search monitors by name or URL");
     search.value = filters.query;
     var debounce = null;
     search.addEventListener("input", function () {
@@ -727,26 +720,9 @@ window.MubwemDashboard = (function () {
 
     el.toolbar.appendChild(row);
 
-    nodes.brandRow = text("div", "chip-row");
-    nodes.brandRow.setAttribute("role", "group");
-    nodes.brandRow.setAttribute("aria-label", "Filter by brand");
-    nodes.brandRow.hidden = true;
-    el.toolbar.appendChild(nodes.brandRow);
-
-    nodes.brandKey = null;
     syncSegGroup(nodes.statusGroup, filters.status);
     syncSegGroup(nodes.densityGroup, filters.density);
     return nodes;
-  }
-
-  function syncBrandChips() {
-    if (!toolbar || !toolbar.brandButtons) return;
-    Object.keys(toolbar.brandButtons).forEach(function (value) {
-      var on = value === filters.brand;
-      var button = toolbar.brandButtons[value].button;
-      button.className = "chip" + (on ? " chip-on" : "");
-      button.setAttribute("aria-pressed", on ? "true" : "false");
-    });
   }
 
   function updateStatusCounts(summary) {
@@ -772,77 +748,17 @@ window.MubwemDashboard = (function () {
     });
   }
 
-  function updateBrandChips(sites) {
-    var counts = {};
-    var order = [];
-    sites.forEach(function (site) {
-      var brand = brandOf(site);
-      if (counts[brand] === undefined) {
-        counts[brand] = 0;
-        order.push(brand);
-      }
-      counts[brand]++;
-    });
-    order.sort(function (a, b) {
-      return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
-    });
-
-    // One brand (or none) is not a dimension worth a filter row.
-    if (order.length < 2) {
-      toolbar.brandRow.hidden = true;
-      toolbar.brandKey = null;
-      if (filters.brand !== "all") filters.brand = "all";
-      return;
-    }
-
-    // Rebuild only when the set of brands actually changes, so a 20s poll
-    // cannot yank a chip out from under a click.
-    var key = order.join(String.fromCharCode(10));
-    if (key !== toolbar.brandKey) {
-      toolbar.brandKey = key;
-      toolbar.brandButtons = {};
-      toolbar.brandRow.innerHTML = "";
-
-      var chip = function (label, value, count) {
-        var button = document.createElement("button");
-        button.type = "button";
-        button.className = "chip";
-        button.appendChild(text("span", null, label));
-        if (count !== null) button.appendChild(text("span", "chip-count", count));
-        button.addEventListener("click", function () {
-          filters.brand = value;
-          syncBrandChips();
-          renderGrid();
-        });
-        toolbar.brandButtons[value] = { button: button };
-        toolbar.brandRow.appendChild(button);
-      };
-
-      chip("All brands", "all", null);
-      order.forEach(function (brand) {
-        chip(brand, brand, counts[brand]);
-      });
-
-      if (!toolbar.brandButtons[filters.brand]) filters.brand = "all";
-    }
-
-    toolbar.brandRow.hidden = false;
-    syncBrandChips();
-  }
-
   function ensureToolbar(payload) {
     if (!el.toolbar) return;
     if (!toolbar) toolbar = buildToolbar();
     updateStatusCounts(payload.summary);
-    updateBrandChips(payload.sites || []);
   }
 
   // ------------------------------------------------------------------ filters
   function filtersActive() {
     return (
       filters.query.trim() !== "" ||
-      filters.status !== "all" ||
-      filters.brand !== "all"
+      filters.status !== "all"
     );
   }
 
@@ -850,12 +766,10 @@ window.MubwemDashboard = (function () {
     var q = filters.query.trim().toLowerCase();
     return sites.filter(function (site) {
       if (filters.status !== "all" && site.status !== filters.status) return false;
-      if (filters.brand !== "all" && brandOf(site) !== filters.brand) return false;
       if (!q) return true;
       return (
         String(site.name || "").toLowerCase().indexOf(q) !== -1 ||
-        String(site.url || "").toLowerCase().indexOf(q) !== -1 ||
-        brandOf(site).toLowerCase().indexOf(q) !== -1
+        String(site.url || "").toLowerCase().indexOf(q) !== -1
       );
     });
   }

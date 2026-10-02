@@ -5,7 +5,6 @@
       "siteId": "example-home",
       "name": "Example Home",
       "url": "https://example.com",
-      "brand": "Example Brand",
       "checkIntervalSec": 60,
       "enabled": true
     },
@@ -13,7 +12,6 @@
       "siteId": "example-shop",
       "name": "Example Shop",
       "url": "https://example.org",
-      "brand": "Example Brand",
       "checkIntervalSec": 60,
       "enabled": true
     },
@@ -21,7 +19,6 @@
       "siteId": "example-staging",
       "name": "Example Staging",
       "url": "https://staging.example.net",
-      "brand": "Second Brand",
       "checkIntervalSec": 60,
       "enabled": false
     },
@@ -29,7 +26,6 @@
       "siteId": "example-archive",
       "name": "Example Archive",
       "url": "https://archive.example.com",
-      "brand": "Second Brand",
       "checkIntervalSec": 60,
       "enabled": true
     }

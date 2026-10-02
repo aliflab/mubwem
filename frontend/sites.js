@@ -101,7 +101,6 @@
     urlCell.appendChild(urlLink);
     row.appendChild(urlCell);
 
-    row.appendChild(text("td", null, site.brand || "Unassigned"));
     row.appendChild(text("td", null, (site.checkIntervalSec || 60) + "s"));
 
     var enabledCell = text("td", null, null);

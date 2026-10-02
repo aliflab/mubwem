@@ -82,7 +82,6 @@ cognito = boto3.client("cognito-idp", config=_boto_config)
 EDITABLE_SITE_FIELDS = (
     "name",
     "url",
-    "brand",
     "checkIntervalSec",
     "enabled",
 )
@@ -277,12 +276,6 @@ def _clean_site_fields(payload, require_name_and_url):
         if not isinstance(url, str) or not url.strip().startswith("https://"):
             raise Invalid("url is required and must start with https://")
         fields["url"] = url.strip()[:2000]
-
-    if "brand" in payload:
-        brand = payload.get("brand")
-        if not isinstance(brand, str) or not brand.strip():
-            raise Invalid("brand must be a non-empty string")
-        fields["brand"] = brand.strip()[:120]
 
     if "checkIntervalSec" in payload:
         raw = payload.get("checkIntervalSec")
@@ -773,7 +766,6 @@ def _handle_create_site(event):
         "siteId": site_id,
         "name": fields["name"],
         "url": fields["url"],
-        "brand": fields.get("brand", "Unassigned"),
         "checkIntervalSec": fields.get("checkIntervalSec", 60),
         # A new site starts switched off. Turning it on is a deliberate act.
         "enabled": fields.get("enabled", False),

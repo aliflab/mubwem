@@ -4,11 +4,9 @@
  * metadata, the hourly buckets, a 24h response-time series and up to 50
  * incidents in one document.
  *
- * The edit form carries the same two conveniences as the Add Monitor page,
- * both implemented once in shell.js: "Detect name" reads a suggestion off the
- * site's own page via POST /admin/sites/preview, and Brand autocompletes from
- * brands already in use. Only the name comes from the page — "brand" is this
- * app's internal grouping, which no website knows about.
+ * The edit form carries the same "Detect name" convenience as the Add Monitor
+ * page, implemented once in shell.js: it reads a suggestion off the site's own
+ * page via POST /admin/sites/preview.
  *
  * The edit form is rendered only for Admins and Editors — the same rule the
  * site-management page uses, and the same caveat: it is presentation, not
@@ -27,7 +25,6 @@
 
   var el = {
     name: document.getElementById("site-name"),
-    brand: document.getElementById("site-brand"),
     badge: document.getElementById("site-badge"),
     url: document.getElementById("site-url"),
     overview: document.getElementById("overview"),
@@ -82,7 +79,6 @@
   function renderOverview(site) {
     document.title = "MuBWeM — " + site.name;
     el.name.textContent = site.name;
-    el.brand.textContent = site.brand || "";
 
     el.badge.textContent = site.status.toUpperCase();
     el.badge.className = "badge badge-" + site.status;
@@ -308,14 +304,6 @@
     detectStatus.hidden = true;
     urlInput.parentNode.appendChild(detectStatus);
 
-    var brandInput = field(
-      "Brand",
-      "brand",
-      "text",
-      site.brand || "",
-      null,
-      "Suggestions are brands already in use; any text is accepted."
-    );
     field(
       "Check interval (s)",
       "checkIntervalSec",
@@ -373,9 +361,9 @@
     );
     form.appendChild(checks);
 
-    // Both conveniences, wired from shell.js so this form and the Add Monitor
-    // page behave the same way. Neither blocks a save: if detection fails or
-    // the suggestions never arrive, every field is still typed by hand.
+    // Wired from shell.js so this form and the Add Monitor page behave the
+    // same way. It never blocks a save: if detection fails, the name is
+    // still typed by hand.
     MubwemShell.attachNameDetection({
       urlInput: urlInput,
       nameInput: nameInput,
@@ -383,7 +371,6 @@
       status: detectStatus,
       adminBase: ADMIN_BASE
     });
-    MubwemShell.attachBrandSuggestions(brandInput, ADMIN_BASE, "brand-options");
 
     var actions = document.createElement("div");
     actions.className = "form-actions";
@@ -408,11 +395,9 @@
       var body = {
         name: form.elements.name.value.trim(),
         url: form.elements.url.value.trim(),
-        brand: form.elements.brand.value.trim(),
         checkIntervalSec: Number(form.elements.checkIntervalSec.value) || 60,
         enabled: form.elements.enabled.checked
       };
-      if (!body.brand) delete body.brand;
 
       if (body.url.indexOf("https://") !== 0) {
         MubwemShell.showError("URL must start with https://");

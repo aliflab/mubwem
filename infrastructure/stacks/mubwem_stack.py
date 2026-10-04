@@ -857,6 +857,18 @@ function handler(event) {
             destination_bucket=site_bucket,
             distribution=distribution,
             distribution_paths=["/*"],
+            # Without an explicit header, browsers guess a freshness lifetime
+            # from Last-Modified - days, for a file that has not changed in
+            # weeks. A deploy that touches settings.js but not auth.js then
+            # runs new settings.js against a stale auth.js. max-age=0 makes
+            # the browser revalidate every load (a 304 when unchanged);
+            # s-maxage lets CloudFront keep caching, since every deploy
+            # invalidates /* above.
+            cache_control=[
+                s3_deploy.CacheControl.max_age(Duration.seconds(0)),
+                s3_deploy.CacheControl.must_revalidate(),
+                s3_deploy.CacheControl.s_max_age(Duration.days(365)),
+            ],
         )
 
         # ------------------------------------------------------------------

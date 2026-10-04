@@ -373,6 +373,32 @@ class MubwemStack(Stack):
         # ------------------------------------------------------------------
         # No self-signup: users are created by an operator with
         # `aws cognito-idp admin-create-user` (see the README).
+        #
+        # Passkeys (Face ID, Touch ID, Windows Hello, a phone) are offered as a
+        # first sign-in factor alongside the password. That needs the
+        # Essentials feature plan and the newer managed login below - both
+        # still free at this scale (Essentials includes 10k MAU). The password
+        # stays: it is how an admin-created user signs in the first time, and
+        # the fallback on a device with no passkey.
+
+        # A Cognito-managed domain - no custom domain, no certificate to manage.
+        # The prefix has to be globally unique, so it defaults to the first
+        # segment of this stack's CloudFormation id: unique per deployment and,
+        # unlike the account id, nothing anyone needs to keep quiet. Override
+        # with `-c cognitoDomainPrefix=something-unique`.
+        cognito_domain_prefix = self.node.try_get_context("cognitoDomainPrefix") or (
+            "mubwem-"
+            + Fn.select(0, Fn.split("-", Fn.select(2, Fn.split("/", self.stack_id))))
+        )
+
+        # Passkeys are bound to the relying party ID, which has to be the
+        # domain that serves the login page - here the prefix domain. Changing
+        # cognitoDomainPrefix after users have registered passkeys orphans
+        # every one of them; they fall back to their password and re-register.
+        passkey_relying_party_id = Fn.join(
+            "", [cognito_domain_prefix, ".auth.", Aws.REGION, ".amazoncognito.com"]
+        )
+
         user_pool = cognito.UserPool(
             self,
             "UserPool",
@@ -392,24 +418,29 @@ class MubwemStack(Stack):
                 require_symbols=False,
             ),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
+            feature_plan=cognito.FeaturePlan.ESSENTIALS,
+            sign_in_policy=cognito.SignInPolicy(
+                allowed_first_auth_factors=cognito.AllowedFirstAuthFactors(
+                    password=True, passkey=True
+                )
+            ),
+            passkey_relying_party_id=passkey_relying_party_id,
+            # Preferred, not required: the managed login nudges users to
+            # register a passkey after a password sign-in, but never blocks
+            # someone on a device that cannot hold one.
+            passkey_user_verification=cognito.PasskeyUserVerification.PREFERRED,
             # Same teardown stance as the tables: users go with the stack.
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        # A Cognito-managed domain - no custom domain, no certificate to manage.
-        # The prefix has to be globally unique, so it defaults to the first
-        # segment of this stack's CloudFormation id: unique per deployment and,
-        # unlike the account id, nothing anyone needs to keep quiet. Override
-        # with `-c cognitoDomainPrefix=something-unique`.
-        cognito_domain_prefix = self.node.try_get_context("cognitoDomainPrefix") or (
-            "mubwem-"
-            + Fn.select(0, Fn.split("-", Fn.select(2, Fn.split("/", self.stack_id))))
-        )
         user_pool_domain = user_pool.add_domain(
             "UserPoolDomain",
             cognito_domain=cognito.CognitoDomainOptions(
                 domain_prefix=cognito_domain_prefix
             ),
+            # The newer managed login is what renders the passkey options; the
+            # classic hosted UI has none.
+            managed_login_version=cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
         )
 
         # ------------------------------------------------------------------
@@ -565,7 +596,9 @@ function handler(event) {
             user_pool_client_name="mubwem-dashboard",
             generate_secret=False,
             prevent_user_existence_errors=True,
-            auth_flows=cognito.AuthFlow(user_srp=True),
+            # `user` is ALLOW_USER_AUTH, the choice-based flow the managed login
+            # uses to offer a passkey or a password.
+            auth_flows=cognito.AuthFlow(user_srp=True, user=True),
             supported_identity_providers=[
                 cognito.UserPoolClientIdentityProvider.COGNITO
             ],
@@ -574,7 +607,14 @@ function handler(event) {
                     authorization_code_grant=True,
                     implicit_code_grant=False,
                 ),
-                scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+                # COGNITO_ADMIN (aws.cognito.signin.user.admin) lets a signed-in
+                # user manage their own passkeys on the managed login's
+                # /passkeys/add page. It grants nothing over other users.
+                scopes=[
+                    cognito.OAuthScope.OPENID,
+                    cognito.OAuthScope.EMAIL,
+                    cognito.OAuthScope.COGNITO_ADMIN,
+                ],
                 callback_urls=all_redirect_uris,
                 # Sign-out always lands on the dashboard root, never on one of
                 # the inner pages - logging out only to bounce straight back
@@ -586,6 +626,16 @@ function handler(event) {
             # No refresh token is kept in the browser; the hosted UI session
             # cookie is what makes re-login silent when the id token expires.
             refresh_token_validity=Duration.days(1),
+        )
+
+        # The newer managed login renders nothing until the app client has a
+        # branding style. Cognito's defaults are fine - no assets to manage.
+        cognito.CfnManagedLoginBranding(
+            self,
+            "ManagedLoginBranding",
+            user_pool_id=user_pool.user_pool_id,
+            client_id=user_pool_client.user_pool_client_id,
+            use_cognito_provided_values=True,
         )
 
         # ------------------------------------------------------------------

@@ -335,8 +335,35 @@
     refresh();
   }
 
+  /* The registration itself happens on Cognito's managed login page, which
+     returns here when done. Nothing about the passkey is stored or shown by
+     the dashboard - Cognito holds the public key, the device holds the rest. */
+  function renderSignIn() {
+    var host = document.getElementById("signin");
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "primary";
+    button.textContent = "Add a passkey";
+    button.addEventListener("click", function () {
+      button.disabled = true;
+      MubwemAuth.addPasskey();
+    });
+
+    host.appendChild(
+      controlRow(
+        "Passkey",
+        "Sign in with Face ID, Touch ID, Windows Hello or your phone instead " +
+          "of typing a password. A passkey belongs to the device or password " +
+          "manager that creates it, so add one on each device you use. Your " +
+          "password keeps working as a fallback.",
+        button
+      )
+    );
+  }
+
   function render() {
     renderDisplay();
+    renderSignIn();
 
     var interval = num(window.MUBWEM_SCHEDULE_INTERVAL_SEC, 60);
     var threshold = num(window.MUBWEM_FAILURE_THRESHOLD, 3);

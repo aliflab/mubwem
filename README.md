@@ -154,6 +154,12 @@ Resolution is three layers, highest first: the viewer's choice in `localStorage`
 
 The id token is kept in `sessionStorage`, never `localStorage`, and no refresh token is stored. A `localStorage` token outlives the browsing session, turning any XSS on a page showing internal hostnames into a durable credential leak. The cost is re-authenticating in a new tab and hourly on expiry, which the hosted UI's session cookie usually makes invisible.
 
+**Passkeys.** The login page is Cognito's newer *managed login* (the user pool is on the Essentials feature plan, still free up to 10k MAU), which offers a passkey — Face ID, Touch ID, Windows Hello, a phone — as the first sign-in factor, with the password as the fallback. A new user's first sign-in is still the emailed temporary password; after a password sign-in the managed login offers to register a passkey, and **Settings → Sign-in → Add a passkey** does the same on demand (it sends the user to the managed login's `/passkeys/add` page and back). A passkey is per device or password manager, so users add one on each device. No SES, no extra Lambda — Cognito holds the public keys.
+
+Passkeys are bound to the relying party ID, which is the Cognito prefix domain (`<prefix>.auth.<region>.amazoncognito.com`). **Changing `cognitoDomainPrefix` after users have registered passkeys orphans all of them**; users fall back to their password and register again.
+
+The app client allows the `aws.cognito.signin.user.admin` scope because `/passkeys/add` needs it. It only appears in the access token, which `auth.js` discards, and it lets a user manage their own account — never anyone else's.
+
 The frontend never has the API URL or Cognito client details committed to git — the stack generates `config.js` at deploy time and uploads it with the static files.
 
 ---
@@ -247,7 +253,7 @@ cp .env.example .env               # .env is gitignored
 | Cognito domain prefix | — | `cognitoDomainPrefix` | derived from the stack id |
 | Check countdown (sec) | — | `scheduleIntervalSec` | derived from `scheduleExpression` |
 
-The hosted-UI domain prefix must be globally unique across all AWS accounts, so it defaults to `mubwem-` plus the first segment of this stack's CloudFormation id. Override with `-c cognitoDomainPrefix=something-unique` for a friendlier login URL.
+The hosted-UI domain prefix must be globally unique across all AWS accounts, so it defaults to `mubwem-` plus the first segment of this stack's CloudFormation id. Override with `-c cognitoDomainPrefix=something-unique` for a friendlier login URL — but pick it before anyone registers a passkey, because passkeys are bound to this domain (see [Login](#login)).
 
 Command-line context wins over both `.env` and `cdk.json`:
 

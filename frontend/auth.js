@@ -168,7 +168,10 @@ window.MubwemAuth = (function () {
       var params = new URLSearchParams({
         client_id: cfg.clientId,
         response_type: "code",
-        scope: "openid email",
+        // aws.cognito.signin.user.admin is what lets the managed login's
+        // /passkeys/add page act for this user. It only ever lands in the
+        // access token, which exchangeCode() discards.
+        scope: "openid email aws.cognito.signin.user.admin",
         redirect_uri: cfg.redirectUri,
         state: state,
         code_challenge: challenge,
@@ -176,6 +179,21 @@ window.MubwemAuth = (function () {
       });
       window.location.assign(cfg.domain + "/oauth2/authorize?" + params);
     });
+  }
+
+  /* Hand off to the managed login's passkey registration page. It relies on
+     the managed-login session cookie from the sign-in that got us here, and
+     returns to this page when done - so the redirect URI is this page's
+     registered callback, exactly as login() uses. Cognito appends no code on
+     this return, so init() just finds the existing token. */
+  function addPasskey() {
+    var cfg = config();
+    if (!isConfigured()) return;
+    var params = new URLSearchParams({
+      client_id: cfg.clientId,
+      redirect_uri: cfg.redirectUri
+    });
+    window.location.assign(cfg.domain + "/passkeys/add?" + params);
   }
 
   function logout() {
@@ -328,6 +346,7 @@ window.MubwemAuth = (function () {
     init: init,
     login: login,
     logout: logout,
+    addPasskey: addPasskey,
     getIdToken: getIdToken,
     claims: claims,
     groups: groups,

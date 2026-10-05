@@ -8,6 +8,19 @@ Everything is behind a Cognito login — there is no public or unauthenticated r
 
 This repo is **Phase 1: the free tier test build**. It is a portfolio project — no real company data, and no hardcoded secrets, email addresses or ARNs in committed code.
 
+**Contents** — [Architecture](#architecture) · [Frontend](#frontend) · [Roles and access control](#roles-and-access-control) · [Deploy](#deploy) · [Creating a user](#creating-a-user) · [API guide](#api-guide) · [Repository layout](#repository-layout) · [Roadmap](#roadmap-later-phases)
+
+### At a glance
+
+| | |
+|---|---|
+| **Checks** | HTTPS GET of every enabled site, once a minute, from one AWS region |
+| **Down means** | `failureThreshold` (default 3) consecutive failures — one blip never alerts |
+| **Alerts** | HTML email via SES on `DOWN` and `RESOLVED`, plain-text SNS fallback, mutable from the UI |
+| **Dashboard** | static pages on CloudFront, Cognito sign-in (password or passkey), polls every 20s |
+| **API** | API Gateway HTTP API, every route behind a Cognito JWT authorizer — see [API guide](#api-guide) |
+| **Stack** | one CDK (Python) stack: 5 DynamoDB tables, 3 Lambdas, EventBridge Scheduler, SES, SNS, Cognito, S3 + CloudFront |
+
 ---
 
 ## Architecture
@@ -59,12 +72,7 @@ Both mails are HTML, rendered by `lambda/checker/email_templates.py` and sent th
 
 ### Status API
 
-`lambda/api/handler.py` serves two routes from one function. The exact response shape is documented at the top of that file.
-
-| Route | Sites returned | Page |
-|---|---|---|
-| `GET /status` | all of them | `/` |
-| `GET /status/{siteId}` | one, with full detail | `/monitor` |
+`lambda/api/handler.py` serves two routes from one function: `GET /status` (every site, used by `/`) and `GET /status/{siteId}` (one site in full detail, used by `/monitor`). The exact response shape is documented at the top of that file, and request/response examples are in the [API guide](#status-endpoints).
 
 Both sit behind the Cognito JWT authorizer. The list route carries a top-level `summary` (up/down/paused counts, weighted 24h uptime, MTBF, time since last incident, incidents in 24h) and a 24-slot `hourlyBuckets` array per site, all computed from the same 24h `UptimeChecks` query the uptime percentage already needed.
 
@@ -83,21 +91,7 @@ A site with `enabled: false` reports `status: "paused"` rather than its last rec
 
 ### Admin API
 
-`lambda/admin/handler.py` is a **separate** function behind the same authorizer.
-
-| Route | Minimum role | What it does |
-|---|---|---|
-| `GET /admin/sites` | Editor | every site, admin view |
-| `POST /admin/sites` | Editor | create a site (starts disabled) |
-| `POST /admin/sites/preview` | Editor | suggest a monitor name by reading a URL's page title |
-| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled` |
-| `DELETE /admin/sites/{siteId}` | **Admin** | delete the Sites row |
-| `GET /admin/settings` | Editor | read the alert-email mute (`emailAlertsEnabled`, who changed it, when) |
-| `PATCH /admin/settings` | Editor | set `emailAlertsEnabled` to `true` or `false` |
-| `GET /admin/users` | **Admin** | list users and their role |
-| `POST /admin/users` | **Admin** | create a user in a role |
-| `PATCH /admin/users/{username}` | **Admin** | change role, enable/disable |
-| `DELETE /admin/users/{username}` | **Admin** | delete a user |
+`lambda/admin/handler.py` is a **separate** function behind the same authorizer, serving eleven `/admin/*` routes for sites, users and settings. The route list with the minimum role for each is in the [API guide](#endpoint-reference); Editors manage sites and the email mute, only Admins delete sites or touch users.
 
 Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` has its own IAM role — read/write on **Sites and Settings only**, plus `cognito-idp` actions scoped to this user pool's ARN.
 
@@ -168,11 +162,11 @@ The frontend never has the API URL or Cognito client details committed to git �
 
 Three Cognito **user pool groups**, created by the stack. A user's group arrives in their id token as the `cognito:groups` claim.
 
-| Role | Sites | Users | Dashboard |
-|---|---|---|---|
-| **Admins** | create, edit, **delete** | create, change role, enable/disable, delete | yes |
-| **Editors** | create, edit — **no delete** | no access | yes |
-| **Viewers** | no access | no access | yes, read-only |
+| Role | Sites | Alert-email mute | Users | Dashboard |
+|---|---|---|---|---|
+| **Admins** | create, edit, **delete** | read, change | create, change role, enable/disable, delete | yes |
+| **Editors** | create, edit — **no delete** | read, change | no access | yes |
+| **Viewers** | no access | no access | no access | yes, read-only |
 
 An Editor who needs a site to stop being checked turns its `enabled` toggle off; deletion has a larger blast radius, so it stays with Admins. Group precedence is `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so multiple memberships resolve predictably.
 
@@ -360,6 +354,335 @@ aws cognito-idp admin-disable-user --user-pool-id <id> --username you@example.co
 
 ---
 
+## API guide
+
+Everything the dashboard shows comes from one API Gateway HTTP API, and you can call it directly — from `curl`, a script, or another tool. It was built for the dashboard rather than as a public machine API: there are no API keys, no versioning promise and no OpenAPI description, and every call needs a signed-in user's token.
+
+### Base URLs
+
+Both come from the deploy outputs (and from `<DashboardUrl>/config.js`):
+
+| Output | Looks like | Routes under it |
+|---|---|---|
+| `ApiUrl` | `https://abc123.execute-api.ap-southeast-2.amazonaws.com/status` | `GET /status`, `GET /status/{siteId}` |
+| `AdminApiUrl` | `https://abc123.execute-api.ap-southeast-2.amazonaws.com/admin` | everything under `/admin/*` |
+
+The examples below assume:
+
+```bash
+export API=https://abc123.execute-api.ap-southeast-2.amazonaws.com   # ApiUrl without /status
+export TOKEN=eyJraWQiOi...                                           # a Cognito id token
+```
+
+### Getting a token
+
+Every route needs a Cognito **id token** (not the access token) in an `Authorization: Bearer <token>` header. It is valid for **one hour**; after that every call returns `401` and you need a new one.
+
+**Option 1 — copy it from the dashboard (simplest).** Sign in at `DashboardUrl`, open the browser's developer console on any dashboard page and run:
+
+```js
+copy(sessionStorage.getItem("mubwem.idToken"))
+```
+
+The token is now on your clipboard. This works for passkey users too.
+
+**Option 2 — the AWS CLI, with a password.** The app client allows Cognito's choice-based `USER_AUTH` flow, so a user with a password can get tokens without a browser. The app client id is not a stack output; read it from `<DashboardUrl>/config.js` (`MUBWEM_COGNITO_CLIENT_ID`).
+
+```bash
+aws cognito-idp initiate-auth \
+  --auth-flow USER_AUTH \
+  --client-id <MUBWEM_COGNITO_CLIENT_ID> \
+  --auth-parameters USERNAME=you@example.com,PREFERRED_CHALLENGE=PASSWORD,PASSWORD='your-password' \
+  --region ap-southeast-2 \
+  --query AuthenticationResult.IdToken --output text
+```
+
+A brand-new user still holding the emailed temporary password gets a `NEW_PASSWORD_REQUIRED` challenge instead of tokens. Sign in once through the dashboard to set a real password first.
+
+> A token carries the user's role (`cognito:groups`) **as it was at sign-in**. After someone's role changes they need a fresh token — sign out and in again, or re-run the CLI call.
+
+### Conventions
+
+- **Requests:** JSON bodies with `Content-Type: application/json`. Unknown fields are ignored. A body that is not valid JSON is treated as `{}`, which usually means a `400` for a missing field. Booleans must be real JSON `true`/`false` — the string `"false"` is rejected, not guessed at.
+- **Responses:** always JSON. Errors are `{"error": "<message>"}` from the Lambdas, or `{"message": "..."}` when API Gateway itself rejects the call before it reaches one.
+- **Timestamps:** ISO 8601 in UTC with milliseconds, e.g. `2026-08-27T09:14:03.221Z`. The API never converts to a local timezone.
+- **Path parameters:** URL-encode them. A username that is an email address becomes `you%40example.com`.
+- **Caching:** `/status` responses carry `cache-control: public, max-age=10`, so a browser may reuse one for up to 10 seconds; `/admin/*` responses are `no-store`.
+- **CORS:** any origin is allowed. The token is what protects the API, not the origin.
+
+| Status | Meaning |
+|---|---|
+| `200` / `201` | success (`201` for a created site or user) |
+| `400` | the body or a parameter is invalid; `error` says which |
+| `401` | missing, malformed or expired token — returned by API Gateway, `{"message":"Unauthorized"}` |
+| `403` | valid token, but your role cannot use this route — `{"error":"forbidden"}` |
+| `404` | no such site or user, or no such route |
+| `409` | conflict: the site/user already exists, or you tried to delete, disable or demote yourself |
+| `500` | something failed server-side; details are in the Lambda's CloudWatch logs, never in the response |
+
+### Endpoint reference
+
+| Method and path | Minimum role | What it does |
+|---|---|---|
+| `GET /status` | Viewer | every site with status, 24h uptime, hourly history and recent incidents |
+| `GET /status/{siteId}` | Viewer | one site, plus its 24h check series and up to 50 incidents |
+| `GET /admin/sites` | Editor | every site as stored, admin view |
+| `POST /admin/sites` | Editor | create a site (starts disabled unless you say otherwise) |
+| `POST /admin/sites/preview` | Editor | suggest a monitor name from a URL's page title |
+| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled` |
+| `DELETE /admin/sites/{siteId}` | **Admin** | delete a site |
+| `GET /admin/settings` | Editor | read the alert-email mute |
+| `PATCH /admin/settings` | Editor | mute or unmute alert email |
+| `GET /admin/users` | **Admin** | list users and their role |
+| `POST /admin/users` | **Admin** | create a user in a role |
+| `PATCH /admin/users/{username}` | **Admin** | change a user's role and/or enable or disable them |
+| `DELETE /admin/users/{username}` | **Admin** | delete a user |
+
+"Viewer" means any signed-in user; "Editor" means Editors and Admins. A user in no group can call only the `/status` routes.
+
+### Status endpoints
+
+#### `GET /status` — all sites
+
+```bash
+curl -s "$API/status" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "generatedAt": "2026-08-27T09:15:00.000Z",
+  "failureThreshold": 3,
+  "summary": {
+    "upCount": 4, "downCount": 1, "pausedCount": 2, "totalMonitors": 7,
+    "overallUptime24h": 99.31,
+    "mtbfSeconds": 18042.5,
+    "timeSinceLastIncidentSeconds": 5120.0,
+    "incidentCount24h": 2
+  },
+  "sites": [
+    {
+      "siteId": "example-home",
+      "name": "Example Home",
+      "url": "https://example.com",
+      "status": "up",
+      "enabled": true,
+      "checkIntervalSec": 60,
+      "lastCheckedAt": "2026-08-27T09:14:03.221Z",
+      "lastResponseTimeMs": 312,
+      "consecutiveFailures": 0,
+      "lastStatusChangeAt": "2026-08-26T22:01:10.004Z",
+      "uptime24h": 99.86,
+      "checks24h": 1437,
+      "hourlyBuckets": ["up", "up", "warn", "down", "...24 in total"],
+      "incidents": [
+        {
+          "startedAt": "2026-08-26T21:58:10.004Z",
+          "endedAt": "2026-08-26T22:01:10.004Z",
+          "durationSec": 180,
+          "triggerReason": "3 consecutive failures - Timeout after 8s",
+          "resolved": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+Field notes:
+
+- `status` is `up`, `down`, `paused` (the site's `enabled` is off) or `unknown` (never checked yet).
+- `sites` is already sorted: down, then unknown, then up, then paused — each group by name.
+- `uptime24h` is a percentage to 2dp, or `null` with no checks in the window. Only checks inside a confirmed outage count as down — see [Status API](#status-api).
+- `hourlyBuckets` is exactly 24 entries, **oldest first**, one per rolling hour: `up`, `warn` (a failure that never reached the threshold), `down` (part of a confirmed outage) or `none` (no checks).
+- `incidents` holds the newest 5 per site. `endedAt` and `durationSec` are `null` while an incident is ongoing.
+- In `summary`, `overallUptime24h` is weighted by check count and leaves out paused sites; `mtbfSeconds` needs at least two incidents and is otherwise `null`. Both MTBF and `incidentCount24h` are computed from those 5-per-site incidents, so they describe recent history.
+
+Handy one-liners with [`jq`](https://jqlang.github.io/jq/):
+
+```bash
+# Name and status of everything that is down
+curl -s "$API/status" -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.sites[] | select(.status == "down") | "\(.name)\t\(.url)"'
+
+# Overall 24h uptime
+curl -s "$API/status" -H "Authorization: Bearer $TOKEN" | jq '.summary.overallUptime24h'
+```
+
+#### `GET /status/{siteId}` — one site in detail
+
+```bash
+curl -s "$API/status/example-home" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "generatedAt": "2026-08-27T09:15:00.000Z",
+  "failureThreshold": 3,
+  "site": {
+    "siteId": "example-home",
+    "name": "Example Home",
+    "...": "every field of a /status site entry, plus:",
+    "checks": [
+      { "checkedAt": "2026-08-26T09:15:41.118Z", "responseTimeMs": 298, "isUp": true },
+      { "checkedAt": "2026-08-26T09:18:40.902Z", "responseTimeMs": null, "isUp": false }
+    ],
+    "incidents": ["...up to 50, newest first"]
+  }
+}
+```
+
+`checks` is the last 24 hours, oldest first, sampled evenly down to at most 500 points so it still spans the whole day. `responseTimeMs` is `null` for a check that got no response. An unknown `siteId` returns `404 {"error": "no such site"}`.
+
+### Site endpoints
+
+#### `GET /admin/sites` — list sites
+
+```bash
+curl -s "$API/admin/sites" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "sites": [
+    {
+      "siteId": "example-home",
+      "name": "Example Home",
+      "url": "https://example.com",
+      "checkIntervalSec": 60,
+      "enabled": true,
+      "createdAt": "2026-08-01T02:11:45.120Z"
+    }
+  ]
+}
+```
+
+The raw `Sites` rows, sorted by name — no status or uptime. Use `/status` for those.
+
+#### `POST /admin/sites` — create a site
+
+```bash
+curl -s -X POST "$API/admin/sites" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name": "Example Shop", "url": "https://shop.example.com", "enabled": true}'
+```
+
+| Field | Required | Rules |
+|---|---|---|
+| `name` | yes | non-empty string, trimmed, truncated to 200 characters |
+| `url` | yes | must start with `https://`; truncated to 2000 characters |
+| `siteId` | no | slugified (`My Site!` → `my-site`, max 64); derived from `name` if omitted |
+| `checkIntervalSec` | no | integer, 60–86400, default `60` — stored but not yet honoured |
+| `enabled` | no | `true`/`false`, default **`false`** — a new site is not checked until switched on |
+
+Returns `201 {"site": {...}}` with the stored row. A `siteId` that already exists is `409` — sites are never silently overwritten. The checker picks up an enabled site within a minute.
+
+#### `POST /admin/sites/preview` — suggest a name
+
+```bash
+curl -s -X POST "$API/admin/sites/preview" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url": "https://www.example.com/"}'
+```
+
+```json
+{ "suggestedName": "Example Domain", "hostname": "www.example.com", "detected": true }
+```
+
+Fetches the page and reads its title. `detected` is `false` when the name was built from the hostname instead. Anything that stops the fetch — a private address, a timeout, an error page, no title — gives the same hostname-based `200` answer, by design, so the endpoint cannot be used to probe networks. Only a URL that is not `https://` or cannot be parsed is a `400`. Nothing is saved.
+
+#### `PATCH /admin/sites/{siteId}` — edit a site
+
+```bash
+# Pause a site
+curl -s -X PATCH "$API/admin/sites/example-shop" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+Send any subset of `name`, `url`, `checkIntervalSec`, `enabled` (same rules as create); `siteId` itself cannot change. Returns `200 {"site": {...}}` with the full updated row. An empty update is `400`; an unknown `siteId` is `404`.
+
+#### `DELETE /admin/sites/{siteId}` — delete a site (Admin)
+
+```bash
+curl -s -X DELETE "$API/admin/sites/example-shop" -H "Authorization: Bearer $TOKEN"
+```
+
+Returns `200 {"deleted": "example-shop"}` — also when no such site existed. Only the `Sites` row is removed; its checks and incidents stay until the checks' TTL expires. To stop checking a site without losing it, `PATCH` it with `{"enabled": false}`.
+
+### Settings endpoints
+
+#### `GET /admin/settings` and `PATCH /admin/settings` — alert-email mute
+
+```bash
+curl -s "$API/admin/settings" -H "Authorization: Bearer $TOKEN"
+
+curl -s -X PATCH "$API/admin/settings" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"emailAlertsEnabled": false}'
+```
+
+```json
+{ "emailAlertsEnabled": false, "updatedAt": "2026-08-27T09:20:11.502Z", "updatedBy": "you@example.com" }
+```
+
+`emailAlertsEnabled` must be a JSON boolean. Before anyone has changed it, `GET` returns `true` with `updatedAt`/`updatedBy` as `null`. The checker reads the flag once per sweep, so a change takes effect within a minute. Muting stops `DOWN` and `RESOLVED` email only — incidents still open, close and show on the dashboard. See [Alerting](#alerting).
+
+### User endpoints (Admin only)
+
+#### `GET /admin/users` — list users
+
+```bash
+curl -s "$API/admin/users" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "users": [
+    {
+      "username": "you@example.com",
+      "email": "you@example.com",
+      "enabled": true,
+      "status": "CONFIRMED",
+      "createdAt": "2026-08-01 02:10:00.123000+00:00",
+      "groups": ["Admins"],
+      "role": "Admin"
+    }
+  ]
+}
+```
+
+`role` is `Admin`, `Editor`, `Viewer` or `null` (in no group). `status` is Cognito's own user status — `FORCE_CHANGE_PASSWORD` until a new user first signs in. `createdAt` comes straight from Cognito, so unlike every other timestamp in the API it is not in the `...Z` format. Lists up to 300 users.
+
+#### `POST /admin/users` — create a user
+
+```bash
+curl -s -X POST "$API/admin/users" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"email": "teammate@example.com", "role": "Editor"}'
+```
+
+`email` is required and becomes the username (lowercased). `role` is `Admin`, `Editor` or `Viewer`, case-insensitive. Cognito emails the user a temporary password that is generated server-side and never returned to you. Returns `201 {"user": {"username", "email", "role", "enabled", "status"}}`; an existing email is `409`.
+
+#### `PATCH /admin/users/{username}` — change role or enable/disable
+
+```bash
+curl -s -X PATCH "$API/admin/users/teammate%40example.com" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"role": "Viewer", "enabled": true}'
+```
+
+Send `role`, `enabled`, or both. Returns `200 {"user": {"username", "groups", "role"}}`. The change applies to the user's **next** sign-in — a token they already hold keeps its old role until it expires. `409` if you try to disable yourself, or to leave `Admins` while you are the last admin; `404` for an unknown user.
+
+#### `DELETE /admin/users/{username}` — delete a user
+
+```bash
+curl -s -X DELETE "$API/admin/users/teammate%40example.com" -H "Authorization: Bearer $TOKEN"
+```
+
+Returns `200 {"deleted": "teammate@example.com"}`. You cannot delete your own account (`409`); an unknown user is `404`.
+
+---
+
 ## Repository layout
 
 ```
@@ -382,8 +705,9 @@ mubwem/
 │   ├── sites.html          monitor management (Admins, Editors)
 │   ├── add-monitor.html    full-page create form (Admins, Editors)
 │   ├── team.html           user management (Admins)
-│   ├── settings.html       stub: read-only deploy config
+│   ├── settings.html       deploy config (read-only), timezone, email mute, passkeys
 │   ├── integrations.html   stub: API URLs, no integrations
+│   ├── app.js              dashboard bootstrap: sign in, then poll GET /status
 │   ├── auth.js             Cognito hosted UI login (auth code + PKCE)
 │   ├── nav.js              shared side navigation and inline SVG icons
 │   ├── shell.js            per-page bootstrap: auth, nav, fetch, formatting

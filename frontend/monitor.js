@@ -45,6 +45,7 @@
   var chart = null;
   var canEdit = false;
   var current = null;
+  var generatedAt = null;
   var failureThreshold = 3;
 
   /* Cognito appends ?code=... to the redirect URI, which wipes our own ?site=
@@ -136,8 +137,63 @@
     el.incidentsPanel.hidden = false;
   }
 
-  function renderChart(site) {
-    var points = (site.checks || []).filter(function (c) {
+  var HOUR_MS = 3600 * 1000;
+  var WINDOW_MS = 24 * HOUR_MS;
+  // Hours between labelled x-axis ticks.
+  var TICK_EVERY_HOURS = 3;
+
+  function cssVar(name, fallback) {
+    var value = getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    return value || fallback;
+  }
+
+  /* Whole-hour tick positions across [min, max] whose wall-clock hour in the
+     display zone is a multiple of TICK_EVERY_HOURS, so the labels read 00:00,
+     03:00, 06:00 in whatever zone the viewer picked rather than drifting with
+     the moment the page loaded. */
+  function hourTicks(min, max) {
+    var ticks = [];
+    for (var t = Math.ceil(min / HOUR_MS) * HOUR_MS; t <= max; t += HOUR_MS) {
+      var hour = parseInt(MubwemShell.formatTimeOfDay(t), 10);
+      if (!isNaN(hour) && hour % TICK_EVERY_HOURS === 0) ticks.push({ value: t });
+    }
+    return ticks;
+  }
+
+  // A dashed horizontal reference line at the window's average, labelled at
+  // the right edge. A plugin rather than a dataset so it never competes with
+  // real checks for the tooltip.
+  var averageLinePlugin = {
+    id: "averageLine",
+    afterDatasetsDraw: function (c, args, opts) {
+      if (opts.value === null || opts.value === undefined) return;
+      var area = c.chartArea;
+      var y = c.scales.y.getPixelForValue(opts.value);
+      if (y < area.top || y > area.bottom) return;
+      var ctx = c.ctx;
+      ctx.save();
+      ctx.strokeStyle = opts.color;
+      ctx.fillStyle = opts.color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(area.left, y);
+      ctx.lineTo(area.right, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "11px Inter, system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillText("avg " + Math.round(opts.value) + " ms", area.right - 4, y - 3);
+      ctx.restore();
+    }
+  };
+
+  function renderChart(site, generatedAt) {
+    var checks = site.checks || [];
+    var points = checks.filter(function (c) {
       return c.responseTimeMs !== null && c.responseTimeMs !== undefined;
     });
 
@@ -155,17 +211,54 @@
       return;
     }
 
-    var total = (site.checks || []).length;
-    el.chartHint.textContent =
-      total +
-      " sampled point" +
-      (total === 1 ? "" : "s") +
-      " across the window. The series is thinned server-side at a regular " +
-      "interval, so it always spans the full 24 hours.";
-
     var data = points.map(function (c) {
       return { x: Date.parse(c.checkedAt), y: c.responseTimeMs };
     });
+
+    // Failed checks get their own red markers. One with no response at all
+    // (timeout, DNS, TLS) has no time to plot, so it sits on the baseline.
+    var failures = checks
+      .filter(function (c) { return !c.isUp; })
+      .map(function (c) {
+        var hasTime = c.responseTimeMs !== null && c.responseTimeMs !== undefined;
+        return {
+          x: Date.parse(c.checkedAt),
+          y: hasTime ? c.responseTimeMs : 0,
+          noResponse: !hasTime
+        };
+      });
+
+    var sorted = data.map(function (p) { return p.y; }).sort(function (a, b) {
+      return a - b;
+    });
+    var sum = sorted.reduce(function (acc, v) { return acc + v; }, 0);
+    var avg = sum / sorted.length;
+    var p95 = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+
+    el.chartHint.textContent =
+      "Min " + sorted[0] + " ms · Avg " + Math.round(avg) + " ms · p95 " + p95 +
+      " ms · Max " + sorted[sorted.length - 1] + " ms, over " + checks.length +
+      " sampled check" + (checks.length === 1 ? "" : "s") +
+      (failures.length
+        ? ", " + failures.length + " failed (red)"
+        : "") +
+      ". The series is thinned server-side at a regular interval, so it " +
+      "always spans the full 24 hours.";
+
+    // Pin the axis to the whole window, not just the span that has data, so
+    // a site added two hours ago reads as "two hours of history".
+    var windowEnd = Date.parse(generatedAt);
+    if (isNaN(windowEnd)) windowEnd = data[data.length - 1].x;
+    var windowStart = windowEnd - WINDOW_MS;
+
+    var textColor = cssVar("--muted", "#94a3b8");
+    var gridColor = cssVar("--border-soft", "#24334a");
+    var downColor = cssVar("--down", "#ef4444");
+    var axisTitle = {
+      display: true,
+      color: cssVar("--text-dim", "#cbd5e1"),
+      font: { size: 12, weight: "600" }
+    };
 
     if (chart) chart.destroy();
     chart = new Chart(el.canvas.getContext("2d"), {
@@ -173,50 +266,95 @@
       data: {
         datasets: [
           {
-            label: "Response time (ms)",
+            label: "Response time",
             data: data,
             borderColor: "#2563eb",
             backgroundColor: "rgba(37, 99, 235, 0.12)",
             borderWidth: 2,
             pointRadius: 0,
+            pointHoverRadius: 4,
             tension: 0.25,
-            fill: true
+            fill: true,
+            order: 2
+          },
+          {
+            label: "Failed check",
+            data: failures,
+            showLine: false,
+            pointRadius: 3.5,
+            pointHoverRadius: 5,
+            pointBackgroundColor: downColor,
+            pointBorderColor: downColor,
+            borderColor: downColor,
+            backgroundColor: downColor,
+            order: 1
           }
         ]
       },
+      plugins: [averageLinePlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
         parsing: false,
-        interaction: { mode: "nearest", intersect: false },
+        interaction: { mode: "nearest", axis: "x", intersect: false },
         scales: {
           // A linear scale over epoch milliseconds, not Chart.js's time
           // scale: the time scale needs a separate date-adapter library, and
           // a tick callback does the same job here with no second dependency.
           x: {
             type: "linear",
+            min: windowStart,
+            max: windowEnd,
+            afterBuildTicks: function (axis) {
+              axis.ticks = hourTicks(windowStart, windowEnd);
+            },
             ticks: {
-              maxTicksLimit: 8,
+              color: textColor,
               callback: function (value) {
                 return MubwemShell.formatTimeOfDay(value);
               }
             },
-            grid: { display: false }
+            grid: { color: gridColor },
+            border: { color: gridColor },
+            title: Object.assign(
+              { text: "Time (" + MubwemShell.zoneLabel() + ")" },
+              axisTitle
+            )
           },
           y: {
             beginAtZero: true,
-            title: { display: true, text: "ms" }
+            ticks: { color: textColor },
+            grid: { color: gridColor },
+            border: { color: gridColor },
+            title: Object.assign({ text: "Response time (ms)" }, axisTitle)
           }
         },
         plugins: {
-          legend: { display: false },
+          averageLine: { value: avg, color: textColor },
+          legend: {
+            // Only worth a legend once there is a second series to tell apart.
+            display: failures.length > 0,
+            labels: {
+              color: textColor,
+              usePointStyle: true,
+              boxHeight: 6,
+              // `order` puts the failure markers on top; keep the legend in
+              // dataset order regardless.
+              sort: function (a, b) { return a.datasetIndex - b.datasetIndex; }
+            }
+          },
           tooltip: {
             callbacks: {
               title: function (items) {
                 return MubwemShell.formatDateTime(items[0].parsed.x);
               },
               label: function (item) {
-                return item.parsed.y + " ms";
+                if (item.datasetIndex === 1) {
+                  return item.raw.noResponse
+                    ? "Failed — no response"
+                    : "Failed — " + item.parsed.y + " ms";
+                }
+                return "Response time: " + item.parsed.y + " ms";
               }
             }
           }
@@ -449,13 +587,14 @@
     return MubwemShell.apiFetch(STATUS_URL + "/" + encodeURIComponent(id))
       .then(function (payload) {
         current = payload.site;
+        generatedAt = payload.generatedAt;
         if (payload.failureThreshold > 0) failureThreshold = payload.failureThreshold;
         MubwemShell.clearError();
         if (el.updated) {
           el.updated.textContent = MubwemDashboard.relativeTime(payload.generatedAt);
         }
         renderOverview(current);
-        renderChart(current);
+        renderChart(current, generatedAt);
         renderIncidents(current);
         if (canEdit) {
           el.editToggle.hidden = false;
@@ -485,7 +624,7 @@
       MubwemShell.onTimeZoneChange(function () {
         if (!current) return;
         renderOverview(current);
-        renderChart(current);
+        renderChart(current, generatedAt);
         renderIncidents(current);
       });
       load();

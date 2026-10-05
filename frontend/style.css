@@ -1110,7 +1110,7 @@ span.card-url:hover { text-decoration: none; }
 
 .detail-id { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-.chart-wrap { position: relative; height: 300px; margin-top: 10px; }
+.chart-wrap { position: relative; height: 340px; margin-top: 10px; }
 
 /* ==========================================================================
    Tables

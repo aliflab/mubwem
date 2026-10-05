@@ -421,9 +421,13 @@ window.MubwemDashboard = (function () {
 
   function renderStats(site) {
     var stats = text("dl", "stats");
+    // One wrapper per label/value pair, so the grid places one item per stat.
+    // A <div> grouping a <dt> and its <dd> is valid inside a <dl>.
     function stat(label, value) {
-      stats.appendChild(text("dt", null, label));
-      stats.appendChild(text("dd", null, value));
+      var item = text("div", "stat");
+      item.appendChild(text("dt", null, label));
+      item.appendChild(text("dd", null, value));
+      stats.appendChild(item);
     }
     stat("Last checked", relativeTime(site.lastCheckedAt));
     stat(

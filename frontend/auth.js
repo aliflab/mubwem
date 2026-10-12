@@ -4,26 +4,37 @@
  * is what stops an intercepted authorization code from being redeemed by
  * anyone else.
  *
- * The id token lives in sessionStorage only — never localStorage. This page
- * will eventually show real internal hostnames, and a localStorage token
- * survives every tab and outlives the browsing session, which turns any XSS
- * into a durable credential leak. sessionStorage dies with the tab; the cost
- * is re-authenticating when the tab is reopened, which the Cognito hosted-UI
- * session cookie usually makes invisible.
+ * The id token and the refresh token live in sessionStorage only — never
+ * localStorage. This page will eventually show real internal hostnames, and a
+ * localStorage token survives every tab and outlives the browsing session,
+ * which turns any XSS into a durable credential leak. sessionStorage dies with
+ * the tab; the cost is signing in again when the tab is reopened.
  *
- * No refresh token is stored at all. When the id token expires (1 hour), the
- * page bounces through the hosted UI again.
+ * The id token lasts an hour. A few minutes before it expires the refresh
+ * token (30 days) is traded for a new one in the background, so an open tab
+ * stays signed in without ever visiting the hosted UI. The hosted UI's own
+ * session cookie lasts only about an hour, so without this an idle dashboard
+ * would land on the sign-in form. Logout revokes the refresh token.
  */
 window.MubwemAuth = (function () {
   "use strict";
 
   var TOKEN_KEY = "mubwem.idToken";
+  var REFRESH_KEY = "mubwem.refreshToken";
   var VERIFIER_KEY = "mubwem.pkceVerifier";
   var STATE_KEY = "mubwem.oauthState";
 
   // Treat a token expiring within this window as already expired, so a poll
   // cannot start with a valid token and arrive with a stale one.
   var EXPIRY_SKEW_MS = 60000;
+
+  // How long before expiry the background refresh fires. Comfortably more
+  // than the skew above, so a poll never sees the token lapse first.
+  var REFRESH_AHEAD_MS = 5 * 60000;
+
+  var refreshTimer = null;
+  // One refresh at a time: parallel callers share the request in flight.
+  var refreshing = null;
 
   /* Which registered callback URL this page uses.
 
@@ -89,7 +100,12 @@ window.MubwemAuth = (function () {
   }
 
   function clearSession() {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
     drop(TOKEN_KEY);
+    drop(REFRESH_KEY);
     drop(VERIFIER_KEY);
     drop(STATE_KEY);
   }
@@ -152,6 +168,95 @@ window.MubwemAuth = (function () {
     }
   }
 
+  /* Keep the id token, and the refresh token when the response carries one,
+     then schedule the next background refresh. */
+  function storeTokens(tokens) {
+    if (!tokens.id_token) throw new Error("no id token in the response");
+    store(TOKEN_KEY, tokens.id_token);
+    if (tokens.refresh_token) store(REFRESH_KEY, tokens.refresh_token);
+    scheduleRefresh();
+    return tokens.id_token;
+  }
+
+  function scheduleRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+    var token = read(TOKEN_KEY);
+    if (!token || !read(REFRESH_KEY)) return;
+    var delay = decodeExpiry(token) - REFRESH_AHEAD_MS - Date.now();
+    refreshTimer = setTimeout(function () {
+      refreshTimer = null;
+      // A failure here is not fatal: the next poll finds no token and
+      // reauthenticate() takes it from there.
+      refresh().catch(function () {});
+    }, Math.max(delay, 0));
+  }
+
+  /* Trade the refresh token for a new id token. Rejects when there is no
+     refresh token or Cognito refuses it (expired after 30 days, or revoked). */
+  function refresh() {
+    if (refreshing) return refreshing;
+    var cfg = config();
+    var refreshToken = read(REFRESH_KEY);
+    if (!refreshToken || !isConfigured()) {
+      return Promise.reject(new Error("no refresh token"));
+    }
+
+    var body = new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: cfg.clientId,
+      refresh_token: refreshToken
+    });
+
+    refreshing = fetch(cfg.domain + "/oauth2/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    })
+      .then(function (res) {
+        if (!res.ok) {
+          // 400 invalid_grant: the refresh token is dead, so forget it. Any
+          // other failure (network, 5xx) leaves it for the next attempt.
+          if (res.status === 400) drop(REFRESH_KEY);
+          throw new Error("token refresh returned HTTP " + res.status);
+        }
+        return res.json();
+      })
+      .then(storeTokens)
+      .then(
+        function (token) {
+          refreshing = null;
+          return token;
+        },
+        function (err) {
+          refreshing = null;
+          throw err;
+        }
+      );
+    return refreshing;
+  }
+
+  /* The id token is gone or was rejected: refresh silently if possible,
+     otherwise send the user through the hosted UI. */
+  function reauthenticate() {
+    return refresh().catch(function () {
+      clearSession();
+      return login().then(function () {
+        return new Promise(function () {});
+      });
+    });
+  }
+
+  // Background tabs throttle timers, so a timer due while the tab was hidden
+  // may not have fired yet. Catch up as soon as the tab is looked at.
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden || !read(REFRESH_KEY)) return;
+    var token = read(TOKEN_KEY);
+    if (!token || decodeExpiry(token) - REFRESH_AHEAD_MS <= Date.now()) {
+      refresh().catch(function () {});
+    }
+  });
+
   // ------------------------------------------------------------ redirects
   function login() {
     var cfg = config();
@@ -198,6 +303,24 @@ window.MubwemAuth = (function () {
 
   function logout() {
     var cfg = config();
+    var refreshToken = read(REFRESH_KEY);
+    if (refreshToken && isConfigured()) {
+      // Best effort. keepalive lets the request outlive the navigation below;
+      // if it fails anyway the token still dies with the tab.
+      try {
+        fetch(cfg.domain + "/oauth2/revoke", {
+          method: "POST",
+          keepalive: true,
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: refreshToken,
+            client_id: cfg.clientId
+          }).toString()
+        }).catch(function () {});
+      } catch (e) {
+        /* nothing to do */
+      }
+    }
     clearSession();
     if (!isConfigured()) {
       window.location.reload();
@@ -253,12 +376,12 @@ window.MubwemAuth = (function () {
         return res.json();
       })
       .then(function (tokens) {
-        if (!tokens.id_token) throw new Error("no id token in the response");
-        // Deliberately dropping refresh_token and access_token on the floor.
-        store(TOKEN_KEY, tokens.id_token);
+        // The access token is deliberately dropped on the floor; the API
+        // takes the id token, and the refresh token renews it.
+        var idToken = storeTokens(tokens);
         drop(VERIFIER_KEY);
         drop(STATE_KEY);
-        return tokens.id_token;
+        return idToken;
       });
   }
 
@@ -301,13 +424,16 @@ window.MubwemAuth = (function () {
     }
 
     var existing = getIdToken();
-    if (existing) return Promise.resolve(existing);
+    if (existing) {
+      // A reloaded page lost its timer; set it up again.
+      scheduleRefresh();
+      return Promise.resolve(existing);
+    }
 
-    // No session: hand off to the hosted UI. This promise never settles,
-    // because the page is navigating away.
-    return login().then(function () {
-      return new Promise(function () {});
-    });
+    // No usable id token. Try the refresh token first, so a reload after the
+    // hour is up stays silent; failing that, hand off to the hosted UI. That
+    // promise never settles, because the page is navigating away.
+    return reauthenticate();
   }
 
   /* The caller's Cognito groups, read from the id token.
@@ -346,6 +472,7 @@ window.MubwemAuth = (function () {
     init: init,
     login: login,
     logout: logout,
+    reauthenticate: reauthenticate,
     addPasskey: addPasskey,
     getIdToken: getIdToken,
     claims: claims,

@@ -623,9 +623,14 @@ function handler(event) {
             ),
             id_token_validity=Duration.hours(1),
             access_token_validity=Duration.hours(1),
-            # No refresh token is kept in the browser; the hosted UI session
-            # cookie is what makes re-login silent when the id token expires.
-            refresh_token_validity=Duration.days(1),
+            # The browser keeps the refresh token in sessionStorage and trades
+            # it for a fresh id token before the hourly expiry, so an open tab
+            # stays signed in for up to 30 days. The hosted UI's own session
+            # cookie lasts only about an hour - on its own it cannot do this.
+            refresh_token_validity=Duration.days(30),
+            # Logout revokes the refresh token, so a copy lifted from the tab
+            # stops working the moment the user signs out.
+            enable_token_revocation=True,
         )
 
         # The newer managed login renders nothing until the app client has a

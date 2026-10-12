@@ -146,7 +146,7 @@ Resolution is three layers, highest first: the viewer's choice in `localStorage`
 
 `frontend/auth.js` runs OAuth 2.0 authorization code with PKCE against the Cognito hosted UI. The app client is public — a static page cannot keep a secret — so PKCE is what stops an intercepted code being redeemed by anyone else.
 
-The id token is kept in `sessionStorage`, never `localStorage`, and no refresh token is stored. A `localStorage` token outlives the browsing session, turning any XSS on a page showing internal hostnames into a durable credential leak. The cost is re-authenticating in a new tab and hourly on expiry, which the hosted UI's session cookie usually makes invisible.
+The id token and the refresh token are kept in `sessionStorage`, never `localStorage`. A `localStorage` token outlives the browsing session, turning any XSS on a page showing internal hostnames into a durable credential leak. The id token lasts an hour; a few minutes before it expires, `auth.js` trades the refresh token (valid 30 days) for a new one in the background, so an open tab — reloads included — stays signed in without visiting the hosted UI. Closing the tab still ends the session, and signing out revokes the refresh token.
 
 **Passkeys.** The login page is Cognito's newer *managed login* (the user pool is on the Essentials feature plan, still free up to 10k MAU), which offers a passkey — Face ID, Touch ID, Windows Hello, a phone — as the first sign-in factor, with the password as the fallback. A new user's first sign-in is still the emailed temporary password; after a password sign-in the managed login offers to register a passkey, and **Settings → Sign-in → Add a passkey** does the same on demand (it sends the user to the managed login's `/passkeys/add` page and back). A passkey is per device or password manager, so users add one on each device. No SES, no extra Lambda — Cognito holds the public keys.
 
@@ -192,7 +192,7 @@ aws cognito-idp admin-add-user-to-group \
   --region ap-southeast-2
 ```
 
-Then sign out and back in — the group lands in a **new** id token, not the one already in `sessionStorage`. Every user after that is created and assigned a role from **Team Members** at `<DashboardUrl>/team`.
+Then sign out and back in — the group lands in a **new** id token, not the one already in `sessionStorage`. (An open tab picks it up on its own within the hour, when the background refresh mints the next id token.) Every user after that is created and assigned a role from **Team Members** at `<DashboardUrl>/team`.
 
 ### What authentication does not cover
 

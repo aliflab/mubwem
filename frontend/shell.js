@@ -92,12 +92,12 @@ window.MubwemShell = (function () {
   }
 
   /* Authenticated fetch against an absolute URL, returning parsed JSON.
-     A 401 means the token died mid-session; bounce through the hosted UI. */
+     A 401 means the token died mid-session; refresh it, or failing that
+     bounce through the hosted UI. */
   function apiFetch(url, options) {
     var token = MubwemAuth.getIdToken();
     if (!token) {
-      MubwemAuth.clearSession();
-      MubwemAuth.login();
+      MubwemAuth.reauthenticate();
       return Promise.reject(new Error("signing in again"));
     }
 
@@ -112,8 +112,7 @@ window.MubwemShell = (function () {
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body)
     }).then(function (res) {
       if (res.status === 401) {
-        MubwemAuth.clearSession();
-        MubwemAuth.login();
+        MubwemAuth.reauthenticate();
         throw new Error("signing in again");
       }
       return res.json().then(

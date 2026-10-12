@@ -30,10 +30,9 @@
           return { Authorization: "Bearer " + token };
         },
         onUnauthorized: function () {
-          // Expired or revoked. The hosted UI session cookie normally makes
-          // this round trip invisible.
-          MubwemAuth.clearSession();
-          MubwemAuth.login();
+          // Expired or revoked. The refresh token normally renews it in the
+          // background; the hosted UI is the fallback when that is gone too.
+          MubwemAuth.reauthenticate();
         }
       });
     }

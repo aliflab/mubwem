@@ -497,6 +497,12 @@
       "enabled",
       site.enabled
     );
+    toggleField(
+      "Display",
+      "Show this monitor on the dashboard. Checks and alerts run either way.",
+      "showOnDashboard",
+      site.showOnDashboard !== false
+    );
     form.appendChild(checks);
 
     // Wired from shell.js so this form and the Add Monitor page behave the
@@ -534,7 +540,8 @@
         name: form.elements.name.value.trim(),
         url: form.elements.url.value.trim(),
         checkIntervalSec: Number(form.elements.checkIntervalSec.value) || 60,
-        enabled: form.elements.enabled.checked
+        enabled: form.elements.enabled.checked,
+        showOnDashboard: form.elements.showOnDashboard.checked
       };
 
       if (body.url.indexOf("https://") !== 0) {

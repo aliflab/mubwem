@@ -39,7 +39,7 @@ All five are on-demand (`PAY_PER_REQUEST`).
 
 | Table | Keys | What it holds |
 |---|---|---|
-| **Sites** | PK `siteId` | `name`, `url`, `checkIntervalSec`, `enabled`, `createdAt` — the monitoring list |
+| **Sites** | PK `siteId` | `name`, `url`, `checkIntervalSec`, `enabled`, `showOnDashboard`, `createdAt` — the monitoring list |
 | **UptimeChecks** | PK `siteId`, SK `checkedAt` (ISO8601) | `statusCode`, `isUp`, `responseTimeMs`, `region`, `ttl` — raw history, TTL-expired after 30 days |
 | **CurrentStatus** | PK `siteId` | `currentStatus`, `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
@@ -429,7 +429,7 @@ A brand-new user still holding the emailed temporary password gets a `NEW_PASSWO
 | `GET /admin/sites` | Editor | every site as stored, admin view |
 | `POST /admin/sites` | Editor | create a site (starts disabled unless you say otherwise) |
 | `POST /admin/sites/preview` | Editor | suggest a monitor name from a URL's page title |
-| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled` |
+| `PATCH /admin/sites/{siteId}` | Editor | edit `name`, `url`, `checkIntervalSec`, `enabled`, `showOnDashboard` |
 | `DELETE /admin/sites/{siteId}` | **Admin** | delete a site |
 | `GET /admin/settings` | Editor | read the alert-email mute |
 | `PATCH /admin/settings` | Editor | mute or unmute alert email |
@@ -466,6 +466,7 @@ curl -s "$API/status" -H "Authorization: Bearer $TOKEN"
       "url": "https://example.com",
       "status": "up",
       "enabled": true,
+      "showOnDashboard": true,
       "checkIntervalSec": 60,
       "lastCheckedAt": "2026-08-27T09:14:03.221Z",
       "lastResponseTimeMs": 312,
@@ -491,6 +492,7 @@ curl -s "$API/status" -H "Authorization: Bearer $TOKEN"
 Field notes:
 
 - `status` is `up`, `down`, `paused` (the site's `enabled` is off) or `unknown` (never checked yet).
+- `showOnDashboard` is display-only: a hidden site is still checked, recorded and alerted on. It stays in `sites` (the Incidents page lists it) but is left out of every `summary` number, and the dashboard drops it from the grid.
 - `sites` is already sorted: down, then unknown, then up, then paused — each group by name.
 - `uptime24h` is a percentage to 2dp, or `null` with no checks in the window. Only checks inside a confirmed outage count as down — see [Status API](#status-api).
 - `hourlyBuckets` is exactly 24 entries, **oldest first**, one per rolling hour: `up`, `warn` (a failure that never reached the threshold), `down` (part of a confirmed outage) or `none` (no checks).
@@ -550,6 +552,7 @@ curl -s "$API/admin/sites" -H "Authorization: Bearer $TOKEN"
       "url": "https://example.com",
       "checkIntervalSec": 60,
       "enabled": true,
+      "showOnDashboard": true,
       "createdAt": "2026-08-01T02:11:45.120Z"
     }
   ]
@@ -573,6 +576,7 @@ curl -s -X POST "$API/admin/sites" \
 | `siteId` | no | slugified (`My Site!` → `my-site`, max 64); derived from `name` if omitted |
 | `checkIntervalSec` | no | integer, 60–86400, default `60` — stored but not yet honoured |
 | `enabled` | no | `true`/`false`, default **`false`** — a new site is not checked until switched on |
+| `showOnDashboard` | no | `true`/`false`, default **`true`** — `false` hides the site from the dashboard only; checks, history and alerts continue |
 
 Returns `201 {"site": {...}}` with the stored row. A `siteId` that already exists is `409` — sites are never silently overwritten. The checker picks up an enabled site within a minute.
 

@@ -90,6 +90,21 @@
     );
     row.appendChild(enabledCell);
 
+    // Dashboard visibility only. Checks, history and alerts carry on either
+    // way. A row without the flag predates it and is shown.
+    var displayCell = text("td", null, null);
+    displayCell.appendChild(
+      MubwemShell.toggle(site.showOnDashboard !== false, function (value) {
+        return patchSite(site.siteId, { showOnDashboard: value }).then(function () {
+          MubwemShell.showNotice(
+            site.name + " is now " +
+              (value ? "shown on" : "hidden from") + " the dashboard."
+          );
+        });
+      })
+    );
+    row.appendChild(displayCell);
+
     var actions = text("td", "cell-actions", null);
     // Admins only — matching what the backend will actually allow. An Editor
     // who needs a site to stop being checked turns Enabled off instead.

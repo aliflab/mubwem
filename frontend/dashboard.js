@@ -767,6 +767,16 @@ window.MubwemDashboard = (function () {
     );
   }
 
+  /* Sites switched to Display off on the Monitors page. They are still in the
+     payload - checked, recorded and alerting as usual, and listed on the
+     Incidents page - but the dashboard leaves them out, and the API already
+     leaves them out of `summary`. A missing flag means shown. */
+  function displayedSites(sites) {
+    return (sites || []).filter(function (site) {
+      return site.showOnDashboard !== false;
+    });
+  }
+
   function visibleSites(sites) {
     var q = filters.query.trim().toLowerCase();
     return sites.filter(function (site) {
@@ -779,7 +789,7 @@ window.MubwemDashboard = (function () {
     });
   }
 
-  function updateCounts(total, shown) {
+  function updateCounts(total, shown, hidden) {
     if (el.resultCount) {
       if (filtersActive() && total > 0) {
         el.resultCount.hidden = false;
@@ -796,7 +806,20 @@ window.MubwemDashboard = (function () {
     // A filtered-to-zero grid is left empty; the result count above it
     // ("Showing 0 of 8 monitors") is the signal that a filter is hiding
     // everything. #empty is the different case - nothing monitored at all.
-    if (el.empty) el.empty.hidden = total !== 0;
+    if (el.empty) {
+      el.empty.hidden = total !== 0;
+      // Monitors exist but every one has Display turned off - "nothing is
+      // monitored" would be false, since they are all still being checked.
+      if (total === 0 && hidden > 0) {
+        if (!el.emptyDefault) el.emptyDefault = el.empty.innerHTML;
+        el.empty.textContent =
+          "Every monitor is hidden from the dashboard. Turn Display back on " +
+          "from Monitors to show one here.";
+      } else if (el.emptyDefault) {
+        el.empty.innerHTML = el.emptyDefault;
+        el.emptyDefault = null;
+      }
+    }
   }
 
   // ------------------------------------------------------------------ grid
@@ -818,7 +841,8 @@ window.MubwemDashboard = (function () {
 
   function renderGrid() {
     if (!el.cards) return;
-    var sites = (lastPayload && lastPayload.sites) || [];
+    var all = (lastPayload && lastPayload.sites) || [];
+    var sites = displayedSites(all);
     var shown = visibleSites(sites);
     var list = filters.density === "list";
 
@@ -835,7 +859,7 @@ window.MubwemDashboard = (function () {
       );
     });
 
-    updateCounts(sites.length, shown.length);
+    updateCounts(sites.length, shown.length, all.length - sites.length);
     tick();
   }
 
@@ -867,7 +891,7 @@ window.MubwemDashboard = (function () {
     if (el.cards) el.cards.removeAttribute("aria-busy");
     ensureToolbar(payload);
     renderSummary(payload.summary);
-    renderOverall(payload.summary, payload.sites || []);
+    renderOverall(payload.summary, displayedSites(payload.sites));
     renderGrid();
 
     // Once per second, independent of the 20s poll, so the countdown moves

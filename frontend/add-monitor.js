@@ -81,7 +81,8 @@
       name: form.elements.name.value.trim(),
       url: form.elements.url.value.trim(),
       checkIntervalSec: Number(form.elements.checkIntervalSec.value) || MIN_INTERVAL_SEC,
-      enabled: form.elements.enabled.checked
+      enabled: form.elements.enabled.checked,
+      showOnDashboard: form.elements.showOnDashboard.checked
     };
 
     if (!body.name) {
@@ -145,6 +146,14 @@
         "Start checking this monitor every minute right away.",
         "enabled",
         false
+      );
+
+      // Defaults to on: hiding a monitor from the dashboard is the exception.
+      toggleField(
+        "Display",
+        "Show this monitor on the dashboard. Checks and alerts run either way.",
+        "showOnDashboard",
+        true
       );
 
       el.panel.hidden = false;

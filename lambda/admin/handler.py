@@ -90,6 +90,7 @@ EDITABLE_SITE_FIELDS = (
     "url",
     "checkIntervalSec",
     "enabled",
+    "showOnDashboard",
 )
 
 # The role name the API speaks, and the Cognito group it maps to.
@@ -301,6 +302,11 @@ def _clean_site_fields(payload, require_name_and_url):
         if not isinstance(payload["enabled"], bool):
             raise Invalid("enabled must be true or false")
         fields["enabled"] = payload["enabled"]
+
+    if "showOnDashboard" in payload:
+        if not isinstance(payload["showOnDashboard"], bool):
+            raise Invalid("showOnDashboard must be true or false")
+        fields["showOnDashboard"] = payload["showOnDashboard"]
 
     return fields
 
@@ -775,6 +781,9 @@ def _handle_create_site(event):
         "checkIntervalSec": fields.get("checkIntervalSec", 60),
         # A new site starts switched off. Turning it on is a deliberate act.
         "enabled": fields.get("enabled", False),
+        # Unlike `enabled`, this defaults on: hiding a monitor from the
+        # dashboard is the exception. It never affects checking or alerting.
+        "showOnDashboard": fields.get("showOnDashboard", True),
         # Server time, always. A client-supplied createdAt is not evidence of
         # anything.
         "createdAt": _iso(datetime.now(timezone.utc)),

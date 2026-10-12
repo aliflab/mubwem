@@ -31,6 +31,7 @@ LIST RESPONSE (GET /status)
       "url":                 "https://example.com",
       "status":              "up" | "down" | "paused" | "unknown",
       "enabled":             true,
+      "showOnDashboard":     true,
       "checkIntervalSec":    60,
       "lastCheckedAt":       "2026-08-27T09:14:03.221Z" | null,
       "lastResponseTimeMs":  312 | null,
@@ -56,6 +57,12 @@ LIST RESPONSE (GET /status)
 precedence over whatever CurrentStatus last recorded - a site nobody is
 checking is not "up", it is switched off. Paused sites are listed like any
 other, counted in `pausedCount`, and excluded from `overallUptime24h`.
+
+`showOnDashboard` is a display preference only - the checker ignores it, so a
+hidden site keeps being checked, recording history and alerting. Hidden sites
+are still listed in `sites` (the Incidents page shows them) but every number
+in `summary` is computed over displayed sites only, so the dashboard, which
+filters hidden sites out of its grid, never shows a count it cannot explain.
 
 `hourlyBuckets` is 24 plain strings, oldest first, one per rolling hour of the
 last day. It carries three states plus "no data", not two:
@@ -205,6 +212,12 @@ def _is_paused(site):
     load_enabled_sites() reads `enabled` with a default of True, so a row that
     never mentions the flag is running, not paused."""
     return not site.get("enabled", True)
+
+
+def _is_displayed(site):
+    """Whether the dashboard shows this site. A row from before the flag
+    existed has no `showOnDashboard` and is shown, like every new site."""
+    return site.get("showOnDashboard", True) is not False
 
 
 def recent_incidents(site_id, limit=INCIDENTS_PER_SITE):
@@ -415,6 +428,7 @@ def site_entry(site, status, checks, now, incident_limit=INCIDENTS_PER_SITE):
         # is not being checked has no current status worth reporting.
         "status": "paused" if paused else status.get("currentStatus", "unknown"),
         "enabled": not paused,
+        "showOnDashboard": _is_displayed(site),
         "lastCheckedAt": status.get("lastCheckedAt"),
         "lastResponseTimeMs": _plain(status.get("lastResponseTimeMs")),
         "consecutiveFailures": _plain(status.get("consecutiveFailures", 0)),
@@ -503,7 +517,7 @@ def build_payload():
             site_entry(site, statuses.get(site_id, {}), check_history(site_id), now)
         )
 
-    summary = build_summary(entries, now)
+    summary = build_summary([e for e in entries if e["showOnDashboard"]], now)
 
     # Down first, then never checked, then up, then paused - each group by
     # name. Paused sits last because it is the one group nobody needs to act

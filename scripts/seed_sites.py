@@ -105,6 +105,7 @@ def to_item(site, now_iso):
         "url": str(site["url"]),
         "checkIntervalSec": int(site.get("checkIntervalSec", 60)),
         "enabled": bool(site.get("enabled", True)),
+        "showOnDashboard": bool(site.get("showOnDashboard", True)),
         # Preserved on re-seed by the conditional write below.
         "createdAt": now_iso,
     }

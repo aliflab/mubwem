@@ -23,6 +23,8 @@ window.MubwemAuth = (function () {
   var REFRESH_KEY = "mubwem.refreshToken";
   var VERIFIER_KEY = "mubwem.pkceVerifier";
   var STATE_KEY = "mubwem.oauthState";
+  // Set while init() retries a sign-in whose state did not match.
+  var RETRY_KEY = "mubwem.stateRetry";
 
   // Treat a token expiring within this window as already expired, so a poll
   // cannot start with a valid token and arrive with a stale one.
@@ -411,12 +413,28 @@ window.MubwemAuth = (function () {
     if (code) {
       var expected = read(STATE_KEY);
       if (!expected || params.get("state") !== expected) {
+        // A code this tab never asked for: the hosted UI was opened directly
+        // (the CognitoLoginUrl output, a bookmark, a stale tab) or from another
+        // tab. Never redeem it - that is the CSRF check - but the hosted UI's
+        // session cookie is now set, so a fresh login() returns straight here
+        // without asking for the password again. Once only: if storage is
+        // broken the state can never match, and that must not loop.
         clearSession();
         stripQuery();
+        if (!read(RETRY_KEY)) {
+          store(RETRY_KEY, "1");
+          if (read(RETRY_KEY)) {
+            return login().then(function () {
+              return new Promise(function () {});
+            });
+          }
+        }
+        drop(RETRY_KEY);
         return Promise.reject(
           new Error("Sign-in state did not match — start again")
         );
       }
+      drop(RETRY_KEY);
       return exchangeCode(code).then(function (token) {
         stripQuery();
         return token;

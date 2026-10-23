@@ -420,6 +420,8 @@ a:focus-visible {
 }
 
 #signed-in-as { color: var(--text-dim); font-weight: 500; }
+.session-account { color: inherit; text-decoration: none; }
+.session-account:hover { color: var(--text); text-decoration: underline; }
 
 .logout { color: var(--muted); font-size: 11.5px; }
 
@@ -1475,6 +1477,14 @@ a.button-link.primary:hover { background: #4f46e5; border-color: #4f46e5; color:
 .setting-row-control .field select { width: 100%; min-width: 0; }
 .setting-row-control .setting-sample { margin-top: 8px; }
 .setting-row-control .link-button { align-self: start; padding: 0; font-size: 11.5px; }
+
+/* Account page: a small stacked form in the control column. */
+.account-form { display: flex; flex-direction: column; gap: 10px; }
+.account-form[hidden] { display: none; }
+.account-form .field input { width: 100%; min-width: 0; }
+.account-form .field label { font-size: 11.5px; }
+.account-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.account-current { font-size: 13px; color: var(--text-dim); word-break: break-all; }
 
 @media (max-width: 620px) {
   .setting-row,

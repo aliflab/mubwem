@@ -121,6 +121,7 @@ A persistent side navigation (`nav.js`) is shared by every page. **Monitors** an
 | `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
 | `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`. |
 | `/team` | Admins | User management. |
+| `/account` | any signed-in user | Your own account: display name, sign-in email (verified by code), password, passkeys, and sign out of all devices. Talks to Cognito directly — see [Login](#login). |
 | `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker and (Admins, Editors) an alert-email mute switch. |
 | `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
 
@@ -148,11 +149,17 @@ Resolution is three layers, highest first: the viewer's choice in `localStorage`
 
 The id token and the refresh token are kept in `sessionStorage`, never `localStorage`. A `localStorage` token outlives the browsing session, turning any XSS on a page showing internal hostnames into a durable credential leak. The id token lasts an hour; a few minutes before it expires, `auth.js` trades the refresh token (valid 30 days) for a new one in the background, so an open tab — reloads included — stays signed in without visiting the hosted UI. Closing the tab still ends the session, and signing out revokes the refresh token.
 
-**Passkeys.** The login page is Cognito's newer *managed login* (the user pool is on the Essentials feature plan, still free up to 10k MAU), which offers a passkey — Face ID, Touch ID, Windows Hello, a phone — as the first sign-in factor, with the password as the fallback. A new user's first sign-in is still the emailed temporary password; after a password sign-in the managed login offers to register a passkey, and **Settings → Sign-in → Add a passkey** does the same on demand (it sends the user to the managed login's `/passkeys/add` page and back). A passkey is per device or password manager, so users add one on each device. No SES, no extra Lambda — Cognito holds the public keys.
+**Passkeys.** The login page is Cognito's newer *managed login* (the user pool is on the Essentials feature plan, still free up to 10k MAU), which offers a passkey — Face ID, Touch ID, Windows Hello, a phone — as the first sign-in factor, with the password as the fallback. A new user's first sign-in is still the emailed temporary password; after a password sign-in the managed login offers to register a passkey, and **Account → Add a passkey** does the same on demand (it sends the user to the managed login's `/passkeys/add` page and back). A passkey is per device or password manager, so users add one on each device. No SES, no extra Lambda — Cognito holds the public keys.
 
 Passkeys are bound to the relying party ID, which is the Cognito prefix domain (`<prefix>.auth.<region>.amazoncognito.com`). **Changing `cognitoDomainPrefix` after users have registered passkeys orphans all of them**; users fall back to their password and register again.
 
-The app client allows the `aws.cognito.signin.user.admin` scope because `/passkeys/add` needs it. It only appears in the access token, which `auth.js` discards, and it lets a user manage their own account — never anyone else's.
+The app client allows the `aws.cognito.signin.user.admin` scope because `/passkeys/add` and the Account page need it. It only appears in the access token, and it lets a user manage their own account — never anyone else's. `auth.js` holds the access token **in memory only**, never in storage; after a reload it mints a fresh one from the refresh token, which could do that anyway, so keeping it adds no exposure.
+
+**Account page.** `/account` calls Cognito's user API (`cognito-idp.<region>.amazonaws.com` — `GetUser`, `UpdateUserAttributes`, `VerifyUserAttribute`, `ChangePassword`, `GlobalSignOut`) straight from the browser with that access token. No MuBWeM route or Lambda is involved, and the admin function's IAM is unchanged. Points worth knowing:
+
+- **Email changes are verified before they apply.** The user pool keeps the original address until the code sent to the new one is entered (`keep_original` in the stack), so a typo cannot replace the sign-in address. The codes come from Cognito's default sender, which is capped at about 50 emails a day per pool — plenty here. Changing your sign-in email does not change where alerts go; that is still `alertEmail`.
+- **Changing a password does not sign out other sessions.** *Sign out all devices* does: it revokes every refresh token for the account, then signs this tab out. An id token already issued to another browser keeps working against the API until it expires (up to an hour), because the HTTP API's JWT authorizer checks signatures, not revocation.
+- **Admins editing someone else** still use `/team` and `/admin/users`. Self-protection there keys on the caller's `sub` as well as their email, so it survives an email change.
 
 The frontend never has the API URL or Cognito client details committed to git — the stack generates `config.js` at deploy time and uploads it with the static files.
 
@@ -709,7 +716,8 @@ mubwem/
 │   ├── sites.html          monitor management (Admins, Editors)
 │   ├── add-monitor.html    full-page create form (Admins, Editors)
 │   ├── team.html           user management (Admins)
-│   ├── settings.html       deploy config (read-only), timezone, email mute, passkeys
+│   ├── account.html        your own name, email, password, passkeys
+│   ├── settings.html       deploy config (read-only), timezone, email mute
 │   ├── integrations.html   stub: API URLs, no integrations
 │   ├── app.js              dashboard bootstrap: sign in, then poll GET /status
 │   ├── auth.js             Cognito hosted UI login (auth code + PKCE)

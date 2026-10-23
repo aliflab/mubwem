@@ -410,6 +410,11 @@ class MubwemStack(Stack):
                 email=cognito.StandardAttribute(required=True, mutable=True)
             ),
             auto_verify=cognito.AutoVerifiedAttrs(email=True),
+            # A user changing their email on the Account page keeps the old
+            # address until the new one is verified. Email is the username
+            # here, so without this a typo'd address would replace it at once
+            # and leave an account nobody can recover.
+            keep_original=cognito.KeepOriginalAttrs(email=True),
             password_policy=cognito.PasswordPolicy(
                 min_length=8,
                 require_lowercase=True,
@@ -585,6 +590,7 @@ function handler(event) {
             "settings",
             "integrations",
             "add-monitor",
+            "account",
         )
         page_redirect_uris = [dashboard_url + "/" + page for page in AUTHENTICATED_PAGES]
         all_redirect_uris = [redirect_uri] + page_redirect_uris
@@ -608,8 +614,9 @@ function handler(event) {
                     implicit_code_grant=False,
                 ),
                 # COGNITO_ADMIN (aws.cognito.signin.user.admin) lets a signed-in
-                # user manage their own passkeys on the managed login's
-                # /passkeys/add page. It grants nothing over other users.
+                # user manage their own account: passkeys on the managed login's
+                # /passkeys/add page, and name, email, password and sign-out
+                # from the Account page. It grants nothing over other users.
                 scopes=[
                     cognito.OAuthScope.OPENID,
                     cognito.OAuthScope.EMAIL,
@@ -830,6 +837,9 @@ function handler(event) {
                 'window.MUBWEM_COGNITO_CLIENT_ID = "%s";'
                 % user_pool_client.user_pool_client_id,
                 'window.MUBWEM_REDIRECT_URI = "%s";' % redirect_uri,
+                # The Account page calls Cognito's user API endpoint
+                # (cognito-idp.<region>.amazonaws.com) directly.
+                'window.MUBWEM_COGNITO_REGION = "%s";' % Aws.REGION,
                 # Every registered callback, so auth.js can return the user to
                 # the page they signed in from instead of the dashboard root.
                 "window.MUBWEM_REDIRECT_URIS = %s;"

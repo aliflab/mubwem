@@ -15,6 +15,12 @@
  * stays signed in without ever visiting the hosted UI. The hosted UI's own
  * session cookie lasts only about an hour, so without this an idle dashboard
  * would land on the sign-in form. Logout revokes the refresh token.
+ *
+ * The access token is kept in memory only, never in storage. The Account page
+ * needs it for Cognito's self-service calls (change password, change email);
+ * nothing else does. A reloaded page has none, and getAccessToken() mints one
+ * from the refresh token - which is already in sessionStorage and can do that
+ * anyway, so holding the access token adds no exposure.
  */
 window.MubwemAuth = (function () {
   "use strict";
@@ -37,6 +43,8 @@ window.MubwemAuth = (function () {
   var refreshTimer = null;
   // One refresh at a time: parallel callers share the request in flight.
   var refreshing = null;
+  // In memory only - see the header.
+  var accessToken = null;
 
   /* Which registered callback URL this page uses.
 
@@ -106,6 +114,7 @@ window.MubwemAuth = (function () {
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
+    accessToken = null;
     drop(TOKEN_KEY);
     drop(REFRESH_KEY);
     drop(VERIFIER_KEY);
@@ -171,11 +180,13 @@ window.MubwemAuth = (function () {
   }
 
   /* Keep the id token, and the refresh token when the response carries one,
-     then schedule the next background refresh. */
+     then schedule the next background refresh. The access token is held in
+     memory, never stored. */
   function storeTokens(tokens) {
     if (!tokens.id_token) throw new Error("no id token in the response");
     store(TOKEN_KEY, tokens.id_token);
     if (tokens.refresh_token) store(REFRESH_KEY, tokens.refresh_token);
+    if (tokens.access_token) accessToken = tokens.access_token;
     scheduleRefresh();
     return tokens.id_token;
   }
@@ -303,6 +314,77 @@ window.MubwemAuth = (function () {
     window.location.assign(cfg.domain + "/passkeys/add?" + params);
   }
 
+  // --------------------------------------------------------- self-service
+  /* Resolves to a usable access token, minting one from the refresh token
+     when memory has none (any reload) or it is about to expire. */
+  function getAccessToken() {
+    if (accessToken && decodeExpiry(accessToken) - EXPIRY_SKEW_MS > Date.now()) {
+      return Promise.resolve(accessToken);
+    }
+    accessToken = null;
+    return refresh().then(function () {
+      if (!accessToken) throw new Error("no access token in the response");
+      return accessToken;
+    });
+  }
+
+  /* The user pool's region. config.js carries it; a config.js from before it
+     did still names the region in the managed-login domain
+     (<prefix>.auth.<region>.amazoncognito.com). */
+  function region() {
+    if (window.MUBWEM_COGNITO_REGION) return window.MUBWEM_COGNITO_REGION;
+    var match = /\.auth\.([a-z0-9-]+)\.amazoncognito\.com/.exec(config().domain);
+    return match ? match[1] : "";
+  }
+
+  /* One of Cognito's user-facing API actions - GetUser, ChangePassword,
+     UpdateUserAttributes and the like - called directly from the browser.
+     They need no AWS credentials: the access token is the authorization, and
+     it only ever reaches the account it was issued to.
+
+     Rejects with an Error whose `code` is Cognito's exception name
+     ("NotAuthorizedException"), so callers can word their own messages. */
+  function userApi(action, params) {
+    var where = region();
+    if (!where) return Promise.reject(new Error("Cognito region is not configured"));
+
+    return getAccessToken().then(function (token) {
+      var body = { AccessToken: token };
+      for (var key in params || {}) {
+        if (Object.prototype.hasOwnProperty.call(params, key)) body[key] = params[key];
+      }
+      return fetch("https://cognito-idp." + where + ".amazonaws.com/", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-amz-json-1.1",
+          "x-amz-target": "AWSCognitoIdentityProviderService." + action
+        },
+        body: JSON.stringify(body)
+      }).then(function (res) {
+        return res.text().then(function (text) {
+          var payload = {};
+          try {
+            payload = text ? JSON.parse(text) : {};
+          } catch (e) {
+            payload = {};
+          }
+          if (!res.ok) {
+            // __type is "NotAuthorizedException", sometimes namespaced with
+            // a "...#" prefix.
+            var type = String(payload.__type || "").split("#").pop();
+            var err = new Error(
+              payload.message || payload.Message || type || "HTTP " + res.status
+            );
+            err.code = type;
+            err.status = res.status;
+            throw err;
+          }
+          return payload;
+        });
+      });
+    });
+  }
+
   function logout() {
     var cfg = config();
     var refreshToken = read(REFRESH_KEY);
@@ -378,8 +460,8 @@ window.MubwemAuth = (function () {
         return res.json();
       })
       .then(function (tokens) {
-        // The access token is deliberately dropped on the floor; the API
-        // takes the id token, and the refresh token renews it.
+        // The API takes the id token and the refresh token renews it. The
+        // access token stays in memory for the Account page's Cognito calls.
         var idToken = storeTokens(tokens);
         drop(VERIFIER_KEY);
         drop(STATE_KEY);
@@ -491,8 +573,11 @@ window.MubwemAuth = (function () {
     login: login,
     logout: logout,
     reauthenticate: reauthenticate,
+    refresh: refresh,
     addPasskey: addPasskey,
     getIdToken: getIdToken,
+    getAccessToken: getAccessToken,
+    userApi: userApi,
     claims: claims,
     groups: groups,
     inAnyGroup: inAnyGroup,

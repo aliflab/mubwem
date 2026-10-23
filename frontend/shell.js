@@ -49,6 +49,20 @@ window.MubwemShell = (function () {
     }, 6000);
   }
 
+  /* The session strip's address, linked to the Account page. Public so the
+     Account page can update it after an email change without a reload. */
+  function setSignedInAs(email) {
+    var who = el("signed-in-as");
+    if (!who || !email) return;
+    who.innerHTML = "";
+    var link = document.createElement("a");
+    link.href = "/account";
+    link.className = "session-account";
+    link.textContent = email;
+    link.title = "Account settings";
+    who.appendChild(link);
+  }
+
   function boot(options) {
     var opts = options || {};
 
@@ -73,8 +87,7 @@ window.MubwemShell = (function () {
 
         if (window.MubwemNav) MubwemNav.render(opts.page);
 
-        var who = el("signed-in-as");
-        if (who && claims.email) who.textContent = claims.email;
+        setSignedInAs(claims.email);
         if (logout) logout.hidden = false;
 
         if (opts.ready) opts.ready(claims, token);
@@ -547,6 +560,7 @@ window.MubwemShell = (function () {
 
   return {
     boot: boot,
+    setSignedInAs: setSignedInAs,
     apiFetch: apiFetch,
     showError: showError,
     clearError: clearError,

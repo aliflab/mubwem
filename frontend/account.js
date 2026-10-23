@@ -385,16 +385,110 @@
   }
 
   // ------------------------------------------------------------ sign-in
+  /* WebAuthn's authenticatorAttachment: "platform" is built into the device
+     (or synced by its password manager), "cross-platform" is something you
+     carry - a security key, or a phone used by scanning a QR code. */
+  var ATTACHMENT = {
+    platform: "Built into a device",
+    "cross-platform": "Security key or phone"
+  };
+
+  // How the browser reached the authenticator when it was registered.
+  var TRANSPORT = {
+    internal: "this device",
+    hybrid: "phone via QR code",
+    usb: "USB",
+    nfc: "NFC",
+    ble: "Bluetooth",
+    "smart-card": "smart card"
+  };
+
+  /* One line per passkey: Cognito's friendly name (usually the password
+     manager or browser that made it - "iCloud Keychain", "Windows Hello"),
+     what kind of authenticator it is, and when it was added. */
+  function passkeyItem(cred) {
+    var item = document.createElement("li");
+    item.className = "passkey-item";
+    item.appendChild(
+      MubwemShell.text("div", "passkey-name", cred.FriendlyCredentialName || "Unnamed passkey")
+    );
+
+    var kind = ATTACHMENT[cred.AuthenticatorAttachment] || "Passkey";
+    var via = (cred.AuthenticatorTransports || [])
+      .map(function (t) { return TRANSPORT[t] || t; })
+      .join(", ");
+    item.appendChild(
+      MubwemShell.text("div", "passkey-meta", via ? kind + " · " + via : kind)
+    );
+
+    // CreatedAt arrives as epoch seconds.
+    var added = Number(cred.CreatedAt) > 0
+      ? "Added " + MubwemShell.formatDateTime(new Date(Number(cred.CreatedAt) * 1000))
+      : "Added at an unknown time";
+    item.appendChild(MubwemShell.text("div", "passkey-meta", added));
+    return item;
+  }
+
+  /* Every page of this user's registered passkeys. Rarely more than one page,
+     but a user with a phone, a laptop and a security key per office adds up. */
+  function listPasskeys() {
+    var all = [];
+    function page(token) {
+      var params = { MaxResults: 20 };
+      if (token) params.NextToken = token;
+      return MubwemAuth.userApi("ListWebAuthnCredentials", params).then(function (res) {
+        all = all.concat(res.Credentials || []);
+        return res.NextToken ? page(res.NextToken) : all;
+      });
+    }
+    return page(null);
+  }
+
   /* The registration itself happens on Cognito's managed login page, which
-     returns here when done. Nothing about the passkey is stored or shown by
-     the dashboard - Cognito holds the public key, the device holds the rest. */
+     returns here when done - and this list is read fresh on that return, so a
+     new passkey shows up straight away. Cognito holds the public key and the
+     details shown here; the device holds the rest. */
   function renderPasskey(host) {
+    var control = document.createElement("div");
+    control.className = "account-form";
+
+    var list = document.createElement("ul");
+    list.className = "passkey-list";
+    list.hidden = true;
+    control.appendChild(list);
+
+    var status = MubwemShell.text("p", "setting-note", "Loading your passkeys…");
+    control.appendChild(status);
+
     var add = button("Add a passkey", false);
     add.className = "primary";
     add.addEventListener("click", function () {
       add.disabled = true;
       MubwemAuth.addPasskey();
     });
+    var actions = document.createElement("div");
+    actions.className = "account-actions";
+    actions.appendChild(add);
+    control.appendChild(actions);
+
+    listPasskeys().then(
+      function (creds) {
+        if (!creds.length) {
+          status.textContent = "No passkeys yet. You sign in with your password.";
+          return;
+        }
+        status.hidden = true;
+        add.textContent = "Add another passkey";
+        creds.forEach(function (cred) {
+          list.appendChild(passkeyItem(cred));
+        });
+        list.hidden = false;
+      },
+      function (err) {
+        // Not worth the page's error strip: adding a passkey still works.
+        status.textContent = "Could not load your passkeys: " + describe(err);
+      }
+    );
 
     host.appendChild(
       controlRow(
@@ -403,7 +497,7 @@
           "of typing a password. A passkey belongs to the device or password " +
           "manager that creates it, so add one on each device you use. Your " +
           "password keeps working as a fallback.",
-        add
+        control
       )
     );
   }

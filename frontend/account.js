@@ -118,7 +118,7 @@
   function refreshClaims() {
     return MubwemAuth.refresh().then(
       function () {
-        MubwemShell.setSignedInAs(MubwemAuth.claims().email);
+        MubwemShell.setSignedInAs(MubwemAuth.claims());
       },
       function () {}
     );
@@ -155,6 +155,9 @@
       busy(save, call.then(function () { return true; })).then(function (ok) {
         if (!ok) return;
         name.input.value = value;
+        // Straight away from what was saved; refreshClaims() then confirms
+        // it from a new id token, which every other page reads.
+        MubwemShell.setSignedInAs({ name: value, email: MubwemAuth.claims().email });
         refreshClaims();
         MubwemShell.showNotice(value ? "Display name saved." : "Display name removed.");
       });

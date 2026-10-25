@@ -444,6 +444,7 @@ A brand-new user still holding the emailed temporary password gets a `NEW_PASSWO
 | `POST /admin/users` | **Admin** | create a user in a role |
 | `PATCH /admin/users/{username}` | **Admin** | change a user's role and/or enable or disable them |
 | `DELETE /admin/users/{username}` | **Admin** | delete a user |
+| `POST /admin/users/{username}/resend` | **Admin** | re-send an unused invite with a new temporary password |
 
 "Viewer" means any signed-in user; "Editor" means Editors and Admins. A user in no group can call only the `/status` routes.
 
@@ -691,6 +692,14 @@ curl -s -X DELETE "$API/admin/users/teammate%40example.com" -H "Authorization: B
 ```
 
 Returns `200 {"deleted": "teammate@example.com"}`. You cannot delete your own account (`409`); an unknown user is `404`.
+
+#### `POST /admin/users/{username}/resend` — re-send an invite
+
+```bash
+curl -s -X POST "$API/admin/users/teammate%40example.com/resend" -H "Authorization: Bearer $TOKEN"
+```
+
+For a user still in `FORCE_CHANGE_PASSWORD`: Cognito emails them a fresh server-generated temporary password, the previous one stops working, and the 7-day window to use it restarts. Returns `200 {"resent": "<username>", "email": "<email>"}`. A user who has already set their own password is `409`; an unknown user is `404`. The Team Members page shows a **Resend invite** button on rows where this applies.
 
 ---
 

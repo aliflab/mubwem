@@ -98,6 +98,36 @@
     );
 
     var actions = text("td", "cell-actions", null);
+
+    // Only for an invite that is still waiting to be used — once the user has
+    // set their own password there is nothing to resend, and the API says so.
+    if (user.enabled && user.status === "FORCE_CHANGE_PASSWORD") {
+      var resend = text("button", "row-action", "Resend invite");
+      resend.type = "button";
+      resend.addEventListener("click", function () {
+        resend.disabled = true;
+        MubwemShell.clearError();
+        api(
+          "POST",
+          "/users/" + encodeURIComponent(user.username) + "/resend"
+        )
+          .then(function () {
+            MubwemShell.showNotice(
+              "Sent " +
+                user.email +
+                " a new temporary password. The previous one no longer works."
+            );
+          })
+          .catch(function (err) {
+            MubwemShell.showError(err.message);
+          })
+          .then(function () {
+            resend.disabled = false;
+          });
+      });
+      actions.appendChild(resend);
+    }
+
     var remove = text("button", "danger", "Remove");
     remove.type = "button";
     remove.addEventListener("click", function () {

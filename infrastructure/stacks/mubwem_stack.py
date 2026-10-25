@@ -780,6 +780,9 @@ function handler(event) {
                     "cognito-idp:AdminDeleteUser",
                     "cognito-idp:AdminDisableUser",
                     "cognito-idp:AdminEnableUser",
+                    # Resend invite: reads the user's email and status before
+                    # the RESEND (which is AdminCreateUser again).
+                    "cognito-idp:AdminGetUser",
                     "cognito-idp:AdminListGroupsForUser",
                     "cognito-idp:ListUsers",
                     # Counting the Admins group, so the handler can refuse to
@@ -805,6 +808,7 @@ function handler(event) {
                 "/admin/users/{username}",
                 [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
             ),
+            ("/admin/users/{username}/resend", [apigwv2.HttpMethod.POST]),
             ("/admin/sites", [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST]),
             # Static path, so it wins over /admin/sites/{siteId} - which in
             # any case has no POST. No new IAM: this route only makes an

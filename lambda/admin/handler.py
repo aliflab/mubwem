@@ -1,12 +1,14 @@
 """MuBWeM admin API Lambda.
 
 Behind the same API Gateway HTTP API and the same Cognito JWT authorizer as
-GET /status, serving eleven routes from one function:
+GET /status, serving twelve routes from one function:
 
   GET    /admin/users             list users and their role
   POST   /admin/users             create a user in a role
   PATCH  /admin/users/{username}  change a user's role (and enabled state)
   DELETE /admin/users/{username}  delete a user
+  POST   /admin/users/{username}/resend
+                                  re-send an unused invite, new temp password
 
   GET    /admin/sites             list every site, admin view
   POST   /admin/sites             create a site
@@ -1035,6 +1037,68 @@ def _handle_create_user(event):
     )
 
 
+def _handle_resend_invite(event):
+    denied = _require(event, ADMIN_ONLY)
+    if denied:
+        return denied
+
+    username = _path_param(event, "username")
+    if not username:
+        raise Invalid("username is required")
+
+    # The frontend passes the Cognito username, which in this pool is the
+    # sub, not the email. A RESEND has to name the email - the pool's username
+    # attribute - so look the user up first. That read also gives the status
+    # check below something to check.
+    try:
+        user = cognito.admin_get_user(UserPoolId=USER_POOL_ID, Username=username)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "UserNotFoundException":
+            return _response(404, {"error": "no such user"})
+        raise
+
+    email = next(
+        (
+            a.get("Value")
+            for a in user.get("UserAttributes", [])
+            if a.get("Name") == "email"
+        ),
+        None,
+    )
+    if not email:
+        return _response(409, {"error": "that user has no email address"})
+
+    # Only an invite still waiting to be used can be resent. Once the user has
+    # set their own password, a RESEND would be refused by Cognito anyway; say
+    # so plainly instead of passing its error through.
+    if user.get("UserStatus") != "FORCE_CHANGE_PASSWORD":
+        return _response(
+            409, {"error": "that user has already accepted their invite"}
+        )
+
+    try:
+        cognito.admin_create_user(
+            UserPoolId=USER_POOL_ID,
+            Username=email,
+            MessageAction="RESEND",
+            # A fresh temporary password, generated here as on create. The old
+            # one stops working, and the 7-day validity window restarts.
+            TemporaryPassword=_temp_password(),
+            DesiredDeliveryMediums=["EMAIL"],
+        )
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        if code == "UserNotFoundException":
+            return _response(404, {"error": "no such user"})
+        if code == "UnsupportedUserStateException":
+            return _response(
+                409, {"error": "that user has already accepted their invite"}
+            )
+        raise
+
+    return _response(200, {"resent": username, "email": email})
+
+
 def _is_last_admin(username):
     """True unless another user can be confirmed to be in the Admins group.
 
@@ -1227,6 +1291,7 @@ ROUTES = {
     "POST /admin/users": _handle_create_user,
     "PATCH /admin/users/{username}": _handle_update_user,
     "DELETE /admin/users/{username}": _handle_delete_user,
+    "POST /admin/users/{username}/resend": _handle_resend_invite,
     "GET /admin/sites": _handle_list_sites,
     "POST /admin/sites": _handle_create_site,
     "PATCH /admin/sites/{siteId}": _handle_update_site,

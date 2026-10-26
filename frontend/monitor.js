@@ -620,7 +620,7 @@
   MubwemShell.boot({
     page: "dashboard",
     ready: function () {
-      canEdit = MubwemAuth.inAnyGroup(["Admins", "Editors"]);
+      canEdit = MubwemAuth.inAnyGroup(["Owners", "Admins", "Editors"]);
       if (canEdit && el.editToggle) {
         el.editToggle.addEventListener("click", function () {
           el.editPanel.hidden = !el.editPanel.hidden;

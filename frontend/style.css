@@ -1137,6 +1137,7 @@ span.card-url:hover { text-decoration: none; }
 
 .admin-table .cell-url { color: var(--muted); word-break: break-all; max-width: 280px; }
 .admin-table .cell-actions { text-align: right; white-space: nowrap; }
+.admin-table .cell-note { color: var(--muted); font-size: 13px; }
 .admin-table .cell-actions button + button { margin-left: 8px; }
 button.row-action { padding: 6px 11px; }
 

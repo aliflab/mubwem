@@ -152,9 +152,9 @@
 
   MubwemShell.boot({
     page: "sites",
-    requireGroups: ["Admins", "Editors"],
+    requireGroups: ["Owners", "Admins", "Editors"],
     ready: function () {
-      isAdmin = MubwemAuth.inAnyGroup(["Admins"]);
+      isAdmin = MubwemAuth.inAnyGroup(["Owners", "Admins"]);
 
       if (!ADMIN_BASE) {
         el.overall.textContent = "Not configured";

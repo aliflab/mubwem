@@ -114,8 +114,8 @@ window.MubwemNav = (function () {
   var PRIMARY = [
     { key: "dashboard", label: "Dashboard", href: "/" },
     { key: "incidents", label: "Incidents", href: "/incidents", badge: true },
-    { key: "sites", label: "Monitors", href: "/sites", groups: ["Admins", "Editors"] },
-    { key: "team", label: "Team Members", href: "/team", groups: ["Admins", "Editors"] }
+    { key: "sites", label: "Monitors", href: "/sites", groups: ["Owners", "Admins", "Editors"] },
+    { key: "team", label: "Team Members", href: "/team", groups: ["Owners", "Admins", "Editors"] }
   ];
 
   var UTILITY = [

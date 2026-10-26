@@ -46,7 +46,7 @@
         <section id="editor-note" class="panel" hidden>
           <h2>Team Members</h2>
           <p class="panel-hint">
-            Only Admins can view or change team members. Ask an Admin if you
+            Only Owners and Admins can view or change team members. Ask one if you
             need someone added or their role changed.
           </p>
         </section>
@@ -86,6 +86,7 @@
                 <option value="Viewer">Viewer</option>
                 <option value="Editor">Editor</option>
                 <option value="Admin">Admin</option>
+                <option value="Owner">Owner</option>
               </select>
             </div>
             <button type="submit" class="primary">Add user</button>
@@ -95,7 +96,7 @@
 
       <footer>
         <span>
-          The first Admin is assigned with the AWS CLI — see the README's
+          The first Owner is assigned with the AWS CLI — see the README's
           bootstrap step.
         </span>
       </footer>

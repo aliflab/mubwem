@@ -123,7 +123,7 @@
 
   MubwemShell.boot({
     page: "sites",
-    requireGroups: ["Admins", "Editors"],
+    requireGroups: ["Owners", "Admins", "Editors"],
     ready: function () {
       if (!ADMIN_BASE) {
         el.overall.textContent = "Not configured";
@@ -135,9 +135,11 @@
         return;
       }
 
-      el.overall.textContent = MubwemAuth.inAnyGroup(["Admins"])
-        ? "Signed in as Admin"
-        : "Signed in as Editor";
+      el.overall.textContent = MubwemAuth.inAnyGroup(["Owners"])
+        ? "Signed in as Owner"
+        : MubwemAuth.inAnyGroup(["Admins"])
+          ? "Signed in as Admin"
+          : "Signed in as Editor";
       el.overall.className = "overall overall-up";
 
       // Defaults to off. Turning a new monitor on is a deliberate act.

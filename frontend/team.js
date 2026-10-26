@@ -1,7 +1,9 @@
 /* MuBWeM team members — the user half of what used to be admin.html.
  *
- * The permission model is unchanged from the old admin.js: user management is Admins
- * only. An Editor can reach this page (the nav links it, since the nav item is
+ * User management is Owners and Admins only. Owner accounts are the exception
+ * within that: only an Owner can make someone an Owner, and an Owner's row can
+ * be changed by that Owner alone, so for everyone else it is drawn read-only
+ * with no actions. An Editor can reach this page (the nav links it, since the nav item is
  * shared with monitor management) but sees an explanatory note instead of the
  * table — no request is made on their behalf, and /admin/users would refuse
  * them if one were.
@@ -19,6 +21,9 @@
   "use strict";
 
   var ADMIN_BASE = window.MUBWEM_ADMIN_API_URL || "";
+
+  // Set in ready(). Decides whether Owner is offered as a role to assign.
+  var isOwner = false;
 
   var el = {
     overall: document.getElementById("overall"),
@@ -43,15 +48,43 @@
     });
   }
 
+  /* Whether a row is the signed-in user's own. The API's username is the
+     Cognito username, which in this pool is the sub. */
+  function isMe(user) {
+    var claims = MubwemAuth.claims() || {};
+    var mine = [claims.sub, claims["cognito:username"], claims.email]
+      .filter(Boolean)
+      .map(function (v) {
+        return String(v).toLowerCase();
+      });
+    return mine.indexOf(String(user.username).toLowerCase()) !== -1;
+  }
+
   function renderRow(user) {
     var row = document.createElement("tr");
 
     row.appendChild(text("td", null, user.email));
 
+    // Someone else's Owner account: nobody but that Owner can change it, so
+    // there is nothing to offer — a plain label, no actions.
+    if (user.role === "Owner" && !isMe(user)) {
+      row.appendChild(text("td", null, "Owner"));
+      row.appendChild(
+        text("td", null, user.enabled ? user.status || "—" : "DISABLED")
+      );
+      row.appendChild(
+        text("td", "cell-actions cell-note", "Only this Owner can change it")
+      );
+      return row;
+    }
+
     var roleCell = text("td", null, null);
     var select = document.createElement("select");
     select.className = "role-select";
-    ["Admin", "Editor", "Viewer"].forEach(function (role) {
+    (isOwner
+      ? ["Owner", "Admin", "Editor", "Viewer"]
+      : ["Admin", "Editor", "Viewer"]
+    ).forEach(function (role) {
       var option = document.createElement("option");
       option.value = role;
       option.textContent = role;
@@ -203,9 +236,9 @@
     page: "team",
     // Editors get in far enough to be told why there is nothing here; a Viewer
     // is redirected to the dashboard, same as everywhere else.
-    requireGroups: ["Admins", "Editors"],
+    requireGroups: ["Owners", "Admins", "Editors"],
     ready: function () {
-      var isAdmin = MubwemAuth.inAnyGroup(["Admins"]);
+      var isAdmin = MubwemAuth.inAnyGroup(["Owners", "Admins"]);
 
       if (!isAdmin) {
         el.editorNote.hidden = false;
@@ -224,8 +257,15 @@
         return;
       }
 
-      el.overall.textContent = "Signed in as Admin";
+      isOwner = MubwemAuth.inAnyGroup(["Owners"]);
+      el.overall.textContent = isOwner ? "Signed in as Owner" : "Signed in as Admin";
       el.overall.className = "overall overall-up";
+
+      // The create form ships with an Owner option; only an Owner may use it.
+      if (!isOwner) {
+        var ownerOption = el.form.querySelector('option[value="Owner"]');
+        if (ownerOption) ownerOption.parentNode.removeChild(ownerOption);
+      }
 
       el.panel.hidden = false;
       el.form.addEventListener("submit", submit);

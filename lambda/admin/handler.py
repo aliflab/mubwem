@@ -42,6 +42,10 @@ results in access being granted.
 
 Roles:
 
+  Owners   everything an Admin can do, plus: only an Owner can make someone
+           an Owner, and an Owner's account can be changed by that Owner
+           alone - no other user, Owner or Admin, can change its role,
+           disable it, delete it or resend its invite
   Admins   everything - manage users, and create/edit/delete sites
   Editors  create and edit sites, mute/unmute alert email; no user
            management, no site deletion
@@ -96,7 +100,12 @@ EDITABLE_SITE_FIELDS = (
 )
 
 # The role name the API speaks, and the Cognito group it maps to.
-ROLE_TO_GROUP = {"Admin": "Admins", "Editor": "Editors", "Viewer": "Viewers"}
+ROLE_TO_GROUP = {
+    "Owner": "Owners",
+    "Admin": "Admins",
+    "Editor": "Editors",
+    "Viewer": "Viewers",
+}
 GROUP_TO_ROLE = {group: role for role, group in ROLE_TO_GROUP.items()}
 
 # EventBridge Scheduler's floor is one minute, and the checker sweeps every
@@ -142,8 +151,12 @@ def _user_groups(event):
         return set()
 
 
-ADMIN_ONLY = {"Admins"}
-CAN_WRITE_SITES = {"Admins", "Editors"}
+# Owners hold every Admin permission, so each set that names Admins names
+# Owners too. OWNER_ONLY is for the few decisions about Owner accounts
+# themselves - see _owner_guard().
+OWNER_ONLY = {"Owners"}
+ADMIN_ONLY = {"Owners", "Admins"}
+CAN_WRITE_SITES = {"Owners", "Admins", "Editors"}
 
 
 def _require(event, allowed_groups):
@@ -318,7 +331,7 @@ def _role_to_group(role):
         raise Invalid("role is required")
     normalised = role.strip().capitalize()
     if normalised not in ROLE_TO_GROUP:
-        raise Invalid("role must be one of Admin, Editor, Viewer")
+        raise Invalid("role must be one of Owner, Admin, Editor, Viewer")
     return ROLE_TO_GROUP[normalised]
 
 
@@ -948,6 +961,57 @@ def _groups_for_user(username):
     return [g["GroupName"] for g in response.get("Groups", [])]
 
 
+def _target_is_owner(username):
+    """True if `username` is in Owners - or if that cannot be established.
+
+    Fail-closed, unlike _groups_for_user(), whose empty list on error would
+    read as "not an Owner" and let an Admin through. The one exception is a
+    user that does not exist: that is not an Owner, and answering False lets
+    the route's own call come back with its 404.
+    """
+    try:
+        response = cognito.admin_list_groups_for_user(
+            UserPoolId=USER_POOL_ID, Username=username, Limit=10
+        )
+        return any(
+            g.get("GroupName") == ROLE_TO_GROUP["Owner"]
+            for g in response.get("Groups", [])
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "UserNotFoundException":
+            return False
+        logger.exception("Could not check a user for Owners; treating as Owner")
+        return True
+    except Exception:  # noqa: BLE001 - fail closed on anything at all
+        logger.exception("Could not check a user for Owners; treating as Owner")
+        return True
+
+
+def _owner_guard(event, username):
+    """403 if `username` is an Owner and the caller is not that same Owner.
+
+    An Owner's account is theirs alone: no Admin and no other Owner can change
+    its role, disable it, delete it or resend its invite. Called by every
+    route that acts on a user, after _require() and before anything changes.
+
+    Deliberately not _is_self(): that answers True when the caller's claims
+    cannot be read, which is the safe answer for a self-delete guard and the
+    unsafe one here. This needs positive evidence the caller is the target.
+    """
+    claims = _caller(event)
+    caller_ids = {
+        str(claims.get(k) or "").strip().lower()
+        for k in ("sub", "cognito:username", "email")
+    }
+    caller_ids.discard("")
+    target = str(username).strip().lower()
+    if _target_is_owner(username) and target not in caller_ids:
+        return _response(
+            403, {"error": "an Owner's account can only be changed by that Owner"}
+        )
+    return None
+
+
 def _handle_list_users(event):
     denied = _require(event, ADMIN_ONLY)
     if denied:
@@ -996,6 +1060,10 @@ def _handle_create_user(event):
         raise Invalid("a valid email is required")
     email = email.strip().lower()
     group = _role_to_group(payload.get("role"))
+    if group == ROLE_TO_GROUP["Owner"] and _require(event, OWNER_ONLY):
+        return _response(
+            403, {"error": "only an Owner can make someone an Owner"}
+        )
 
     try:
         created = cognito.admin_create_user(
@@ -1045,6 +1113,10 @@ def _handle_resend_invite(event):
     username = _path_param(event, "username")
     if not username:
         raise Invalid("username is required")
+
+    owner_denied = _owner_guard(event, username)
+    if owner_denied:
+        return owner_denied
 
     # The frontend passes the Cognito username, which in this pool is the
     # sub, not the email. A RESEND has to name the email - the pool's username
@@ -1099,44 +1171,45 @@ def _handle_resend_invite(event):
     return _response(200, {"resent": username, "email": email})
 
 
-def _is_last_admin(username):
-    """True unless another user can be confirmed to be in the Admins group.
+def _is_last_member(username, group_names):
+    """True unless another user can be confirmed to be in one of `group_names`.
 
     Fail-closed, like everything else in this file: an API error, a response
     shaped unexpectedly, an exception anywhere in the count - all return True.
     Being unable to confirm that a second admin exists is not evidence that
-    one does, and guessing wrong here leaves a user pool with no admin in it
-    and no way back except the CLI bootstrap step.
+    one does, and guessing wrong here leaves a user pool with no admin (or no
+    Owner) in it and no way back except the CLI bootstrap step.
 
     Note what the return value means: True is "do not allow this", not "this
-    is definitely the last admin".
+    is definitely the last one".
     """
-    admin_group = ROLE_TO_GROUP["Admin"]
     target = str(username).strip().lower()
-    try:
-        kwargs = {
-            "UserPoolId": USER_POOL_ID,
-            "GroupName": admin_group,
-            "Limit": USERS_PER_PAGE,
-        }
-        for _ in range(MAX_USER_PAGES):
-            page = cognito.list_users_in_group(**kwargs)
-            for user in page.get("Users", []):
-                other = str(user.get("Username") or "").strip().lower()
-                if other and other != target:
-                    # One confirmed admin who is not the caller is the whole
-                    # question - stop looking.
-                    return False
-            token = page.get("NextToken")
-            if not token:
-                break
-            kwargs["NextToken"] = token
-        return True
-    except Exception:
-        logger.exception(
-            "Could not count the %s group; refusing the self-demotion", admin_group
-        )
-        return True
+    for group_name in group_names:
+        try:
+            kwargs = {
+                "UserPoolId": USER_POOL_ID,
+                "GroupName": group_name,
+                "Limit": USERS_PER_PAGE,
+            }
+            for _ in range(MAX_USER_PAGES):
+                page = cognito.list_users_in_group(**kwargs)
+                for user in page.get("Users", []):
+                    other = str(user.get("Username") or "").strip().lower()
+                    if other and other != target:
+                        # One confirmed member who is not the caller is the
+                        # whole question - stop looking.
+                        return False
+                token = page.get("NextToken")
+                if not token:
+                    break
+                kwargs["NextToken"] = token
+        except Exception:
+            logger.exception(
+                "Could not count the %s group; refusing the self-demotion",
+                group_name,
+            )
+            return True
+    return True
 
 
 def _handle_update_user(event):
@@ -1152,33 +1225,54 @@ def _handle_update_user(event):
     if "role" not in payload and "enabled" not in payload:
         raise Invalid("nothing to update - pass role and/or enabled")
 
-    # Resolved before anything is applied, because the last-admin guard below
-    # has to know what the role is being changed *to*.
-    new_group = _role_to_group(payload["role"]) if "role" in payload else None
+    owner_denied = _owner_guard(event, username)
+    if owner_denied:
+        return owner_denied
 
-    # Last-admin guard. Reaching this line means _require() accepted the
-    # caller as an Admin, so "target is me, and the new role is not Admin" is
-    # exactly the request that takes Admins away from the caller - no separate
-    # lookup of their current groups is needed to establish that.
-    #
-    # Self-demotion only. An admin changing someone else's role stays an admin
-    # either way, so the invariant "at least one admin exists" is never in
-    # question and the count is not worth paying for.
-    if (
-        new_group is not None
-        and new_group != ROLE_TO_GROUP["Admin"]
-        and _is_self(event, username)
-        and _is_last_admin(username)
-    ):
+    # Resolved before anything is applied, because the guards below have to
+    # know what the role is being changed *to*.
+    new_group = _role_to_group(payload["role"]) if "role" in payload else None
+    owner_group = ROLE_TO_GROUP["Owner"]
+
+    if new_group == owner_group and _require(event, OWNER_ONLY):
         return _response(
-            409,
-            {
-                "error": (
-                    "cannot remove Admins role: you are the last remaining "
-                    "admin"
-                )
-            },
+            403, {"error": "only an Owner can make someone an Owner"}
         )
+
+    # Last-owner and last-admin guards. Self-demotion only: changing someone
+    # else's role leaves the caller where they were, so the invariants "at
+    # least one Owner" and "at least one user who can manage users" are never
+    # in question and the count is not worth paying for. Reaching this line
+    # means _require() accepted the caller as an Owner or Admin, so their
+    # token's groups say which of the two they are stepping down from.
+    if new_group is not None and _is_self(event, username):
+        caller_is_owner = owner_group in _user_groups(event)
+        if (
+            caller_is_owner
+            and new_group != owner_group
+            and _is_last_member(username, [owner_group])
+        ):
+            return _response(
+                409,
+                {
+                    "error": (
+                        "cannot remove Owners role: you are the last remaining "
+                        "owner - make someone else an Owner first"
+                    )
+                },
+            )
+        if new_group not in ADMIN_ONLY and _is_last_member(
+            username, sorted(ADMIN_ONLY)
+        ):
+            return _response(
+                409,
+                {
+                    "error": (
+                        "cannot remove Admins role: you are the last remaining "
+                        "admin"
+                    )
+                },
+            )
 
     if "enabled" in payload:
         if not isinstance(payload["enabled"], bool):
@@ -1272,6 +1366,10 @@ def _handle_delete_user(event):
                 )
             },
         )
+
+    owner_denied = _owner_guard(event, username)
+    if owner_denied:
+        return owner_denied
 
     try:
         cognito.admin_delete_user(UserPoolId=USER_POOL_ID, Username=username)

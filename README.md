@@ -4,7 +4,7 @@
 
 An UptimeRobot-style uptime monitor built on AWS with CDK (Python). It checks a list of sites every minute, records every check, opens and closes incidents, emails you when something goes down or recovers, and serves a static dashboard from CloudFront.
 
-Everything is behind a Cognito login — there is no public or unauthenticated route anywhere. Access is role based: **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI.
+Everything is behind a Cognito login — there is no public or unauthenticated route anywhere. Access is role based: **Owners**, **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI.
 
 This repo is **Phase 1: the free tier test build**. It is a portfolio project — no real company data, and no hardcoded secrets, email addresses or ARNs in committed code.
 
@@ -91,7 +91,7 @@ A site with `enabled: false` reports `status: "paused"` rather than its last rec
 
 ### Admin API
 
-`lambda/admin/handler.py` is a **separate** function behind the same authorizer, serving eleven `/admin/*` routes for sites, users and settings. The route list with the minimum role for each is in the [API guide](#endpoint-reference); Editors manage sites and the email mute, only Admins delete sites or touch users.
+`lambda/admin/handler.py` is a **separate** function behind the same authorizer, serving twelve `/admin/*` routes for sites, users and settings. The route list with the minimum role for each is in the [API guide](#endpoint-reference); Editors manage sites and the email mute, only Owners and Admins delete sites or touch users, and only an Owner can touch an Owner.
 
 Two functions rather than more routes on one: giving the read-only status function the ability to administer the user pool would put that capability behind every `/status` request. `AdminFunction` has its own IAM role — read/write on **Sites and Settings only**, plus `cognito-idp` actions scoped to this user pool's ARN.
 
@@ -111,16 +111,16 @@ The dark design system lives entirely in `frontend/style.css` — surface/border
 
 **URLs carry no `.html`.** A CloudFront Function (`ExtensionlessUrlFunction`) rewrites the path on viewer-request, so `/monitor` fetches `monitor.html` while the address bar keeps the clean URL. The rule is narrow: a URI ending in `/` is left alone, and one whose **last path segment** contains a dot is passed through as a file. The rewrite only ever adds `.html` — an old `/monitor.html` bookmark still works, though only the clean path is a registered Cognito callback.
 
-A persistent side navigation (`nav.js`) is shared by every page. **Monitors** and **Team Members** are shown only to Admins and Editors — presentation, enforced server-side regardless.
+A persistent side navigation (`nav.js`) is shared by every page. **Monitors** and **Team Members** are shown only to Owners, Admins and Editors — presentation, enforced server-side regardless.
 
 | Page | Who | What |
 |---|---|---|
 | `/` | any signed-in user | Toolbar (search, status, density) over two summary cards and a monitor grid. Each card: status badge, countdown ring, 24-bar hourly history, 24h uptime. |
 | `/monitor?site=<siteId>` | any signed-in user | One monitor: large hourly bar, detail stats, a Chart.js 24h response-time graph, up to 50 incidents. Admins and Editors also get an **Edit** form; a Viewer sees no edit control at all, not a disabled one. |
 | `/incidents` | any signed-in user | Cross-site incident list, newest first, filterable by monitor. |
-| `/sites` | Admins, Editors | Monitor management: enable toggle and (Admins only) delete. |
+| `/sites` | Owners, Admins, Editors | Monitor management: enable toggle and (Owners, Admins only) delete. |
 | `/add-monitor` | Admins, Editors | Full-page create form. "Detect name" calls `POST /admin/sites/preview`. |
-| `/team` | Admins | User management. |
+| `/team` | Owners, Admins | User management. Other people's Owner rows are read-only. |
 | `/account` | any signed-in user | Your own account: display name, sign-in email (verified by code), password, passkeys, and sign out of all devices. Talks to Cognito directly — see [Login](#login). |
 | `/settings` | any signed-in user | **Mostly a stub.** Read-only view of deploy-time configuration, plus a working display-timezone picker and (Admins, Editors) an alert-email mute switch. |
 | `/integrations` | any signed-in user | **Stub.** The API URLs. No integrations exist. |
@@ -167,15 +167,18 @@ The frontend never has the API URL or Cognito client details committed to git �
 
 ## Roles and access control
 
-Three Cognito **user pool groups**, created by the stack. A user's group arrives in their id token as the `cognito:groups` claim.
+Four Cognito **user pool groups**, created by the stack. A user's group arrives in their id token as the `cognito:groups` claim.
 
 | Role | Sites | Alert-email mute | Users | Dashboard |
 |---|---|---|---|---|
-| **Admins** | create, edit, **delete** | read, change | create, change role, enable/disable, delete | yes |
+| **Owners** | create, edit, **delete** | read, change | everything Admins can, plus assigning the Owner role; their own account can be changed by no one else | yes |
+| **Admins** | create, edit, **delete** | read, change | create, change role, enable/disable, delete — except Owners | yes |
 | **Editors** | create, edit — **no delete** | read, change | no access | yes |
 | **Viewers** | no access | no access | no access | yes, read-only |
 
-An Editor who needs a site to stop being checked turns its `enabled` toggle off; deletion has a larger blast radius, so it stays with Admins. Group precedence is `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so multiple memberships resolve predictably.
+An Editor who needs a site to stop being checked turns its `enabled` toggle off; deletion has a larger blast radius, so it stays with Owners and Admins. Group precedence is `Owners` 0, `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so multiple memberships resolve predictably.
+
+**Owner accounts belong to their Owner.** Only an Owner can create an Owner or promote someone to Owner. No one else — not an Admin, not another Owner — can change an Owner's role, disable, delete or resend their invite (`403`, enforced by `_owner_guard()`). An Owner can step down to another role, unless they are the last Owner (`409`), so ownership is handed over by promoting someone first. The flip side: an Owner who has left can only be removed by themselves or with the AWS CLI.
 
 ### Where the enforcement is
 
@@ -185,17 +188,17 @@ Every group decision is made in `lambda/admin/handler.py`, in `_user_groups()` a
 
 The frontend decodes the same claim to decide which controls to draw. That is **presentation, not security** — the backend refuses regardless; its only job is to avoid offering someone a button that will fail.
 
-Two self-inflicted lockouts are blocked, both with a 409: an admin cannot disable or delete their own account (`_is_self()` compares against the caller's `sub`, `cognito:username` and `email` claims), and cannot demote themselves out of `Admins` if `_is_last_admin()` says they are the last one.
+Two self-inflicted lockouts are blocked, both with a 409: an admin cannot disable or delete their own account (`_is_self()` compares against the caller's `sub`, `cognito:username` and `email` claims), and cannot demote themselves out of `Admins`/`Owners` if `_is_last_member()` says no other Owner or Admin exists (or, for an Owner, no other Owner).
 
 ### Bootstrapping the first admin
 
-Groups can only be assigned through the admin panel, and reaching it requires already being in `Admins`. The first user therefore has no group, and one manual CLI call is unavoidable:
+Groups can only be assigned through the admin panel, and reaching it requires already being an Owner or Admin — and only an Owner can make an Owner, so the first user goes straight into `Owners`. The first user therefore has no group, and one manual CLI call is unavoidable:
 
 ```bash
 aws cognito-idp admin-add-user-to-group \
   --user-pool-id <CognitoUserPoolId output> \
   --username you@example.com \
-  --group-name Admins \
+  --group-name Owners \
   --region ap-southeast-2
 ```
 
@@ -277,11 +280,11 @@ Deploy prints ten outputs:
 |---|---|
 | `DashboardUrl` | the CloudFront dashboard (login required) |
 | `SitesAdminUrl` | monitor management — Admins and Editors |
-| `TeamAdminUrl` | user management — Admins |
+| `TeamAdminUrl` | user management — Owners and Admins |
 | `ApiUrl` | `GET /status` — needs a Cognito id token |
 | `AdminApiUrl` | base path for `/admin/*` — needs a token *and* the right group |
 | `CognitoLoginUrl` | the hosted UI login page |
-| `CognitoUserPoolId` | needed to create the first user and put them in `Admins` |
+| `CognitoUserPoolId` | needed to create the first user and put them in `Owners` |
 | `SitesTableName` | used by `scripts/seed_sites.py` |
 | `AlertTopicArn` | SNS topic used as the plain-text alert fallback |
 | `DeliveryFailureTopicArn` | SNS topic SES reports bounces and complaints to |
@@ -351,7 +354,7 @@ aws cognito-idp admin-create-user \
 
 Passwords must be at least 8 characters with an uppercase letter, a lowercase letter and a digit. Add `--message-action SUPPRESS` to hand the temporary password over yourself instead of having Cognito email it.
 
-That user exists but is in **no group**, so they can sign in and see nothing else. Put them in `Admins` with the step in [Bootstrapping the first admin](#bootstrapping-the-first-admin).
+That user exists but is in **no group**, so they can sign in and see nothing else. Put them in `Owners` with the step in [Bootstrapping the first admin](#bootstrapping-the-first-admin).
 
 **Revoking access:** disable or delete the user from the **Team Members** table, or:
 
@@ -446,7 +449,7 @@ A brand-new user still holding the emailed temporary password gets a `NEW_PASSWO
 | `DELETE /admin/users/{username}` | **Admin** | delete a user |
 | `POST /admin/users/{username}/resend` | **Admin** | re-send an unused invite with a new temporary password |
 
-"Viewer" means any signed-in user; "Editor" means Editors and Admins. A user in no group can call only the `/status` routes.
+"Viewer" means any signed-in user; "Editor" means Editors, Admins and Owners; "Admin" means Admins and Owners. Every user route also refuses to act on an Owner's account for anyone but that Owner (`403`). A user in no group can call only the `/status` routes.
 
 ### Status endpoints
 
@@ -639,7 +642,7 @@ curl -s -X PATCH "$API/admin/settings" \
 
 `emailAlertsEnabled` must be a JSON boolean. Before anyone has changed it, `GET` returns `true` with `updatedAt`/`updatedBy` as `null`. The checker reads the flag once per sweep, so a change takes effect within a minute. Muting stops `DOWN` and `RESOLVED` email only — incidents still open, close and show on the dashboard. See [Alerting](#alerting).
 
-### User endpoints (Admin only)
+### User endpoints (Owners and Admins only)
 
 #### `GET /admin/users` — list users
 
@@ -663,7 +666,7 @@ curl -s "$API/admin/users" -H "Authorization: Bearer $TOKEN"
 }
 ```
 
-`role` is `Admin`, `Editor`, `Viewer` or `null` (in no group). `status` is Cognito's own user status — `FORCE_CHANGE_PASSWORD` until a new user first signs in. `createdAt` comes straight from Cognito, so unlike every other timestamp in the API it is not in the `...Z` format. Lists up to 300 users.
+`role` is `Owner`, `Admin`, `Editor`, `Viewer` or `null` (in no group). `status` is Cognito's own user status — `FORCE_CHANGE_PASSWORD` until a new user first signs in. `createdAt` comes straight from Cognito, so unlike every other timestamp in the API it is not in the `...Z` format. Lists up to 300 users.
 
 #### `POST /admin/users` — create a user
 
@@ -673,7 +676,7 @@ curl -s -X POST "$API/admin/users" \
   -d '{"email": "teammate@example.com", "role": "Editor"}'
 ```
 
-`email` is required and becomes the username (lowercased). `role` is `Admin`, `Editor` or `Viewer`, case-insensitive. Cognito emails the user a temporary password that is generated server-side and never returned to you. Returns `201 {"user": {"username", "email", "role", "enabled", "status"}}`; an existing email is `409`.
+`email` is required and becomes the username (lowercased). `role` is `Owner`, `Admin`, `Editor` or `Viewer`, case-insensitive; only an Owner may pass `Owner` (`403` otherwise). Cognito emails the user a temporary password that is generated server-side and never returned to you. Returns `201 {"user": {"username", "email", "role", "enabled", "status"}}`; an existing email is `409`.
 
 #### `PATCH /admin/users/{username}` — change role or enable/disable
 
@@ -683,7 +686,7 @@ curl -s -X PATCH "$API/admin/users/teammate%40example.com" \
   -d '{"role": "Viewer", "enabled": true}'
 ```
 
-Send `role`, `enabled`, or both. Returns `200 {"user": {"username", "groups", "role"}}`. The change applies to the user's **next** sign-in — a token they already hold keeps its old role until it expires. `409` if you try to disable yourself, or to leave `Admins` while you are the last admin; `404` for an unknown user.
+Send `role`, `enabled`, or both. Returns `200 {"user": {"username", "groups", "role"}}`. The change applies to the user's **next** sign-in — a token they already hold keeps its old role until it expires. `409` if you try to disable yourself, to leave `Owners` while you are the last owner, or to leave `Admins` while you are the last admin; `403` if the target is someone else's Owner account or you are not an Owner and pass `role: Owner`; `404` for an unknown user.
 
 #### `DELETE /admin/users/{username}` — delete a user
 
@@ -724,7 +727,7 @@ mubwem/
 │   ├── incidents.html      cross-site incident list
 │   ├── sites.html          monitor management (Admins, Editors)
 │   ├── add-monitor.html    full-page create form (Admins, Editors)
-│   ├── team.html           user management (Admins)
+│   ├── team.html           user management (Owners, Admins)
 │   ├── account.html        your own name, email, password, passkeys
 │   ├── settings.html       deploy config (read-only), timezone, email mute
 │   ├── integrations.html   stub: API URLs, no integrations

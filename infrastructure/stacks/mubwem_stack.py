@@ -15,7 +15,8 @@ The dashboard is login-gated by a Cognito user pool (admin-created users
 only, no self-signup). Every route on the HTTP API sits behind the JWT
 authorizer - there is no unauthenticated route anywhere in the system.
 
-Access is role based, via three Cognito groups - Admins, Editors, Viewers.
+Access is role based, via four Cognito groups - Owners, Admins, Editors,
+Viewers.
 A second Lambda (AdminFunction) serves /admin/* behind the same JWT
 authorizer; the authorizer only proves the token is valid, so which group the
 caller is in is decided inside that function, never here.
@@ -461,15 +462,21 @@ class MubwemStack(Stack):
         # Admins and Viewers resolves to Admins rather than to whichever group
         # happens to sort first.
         #
-        # Chicken and egg: the very first user cannot be put in Admins through
+        # Chicken and egg: the very first user cannot be put in Owners through
         # the admin panel, because reaching the admin panel requires already
-        # being in Admins. That one assignment is a manual CLI step, documented
-        # in the README:
+        # being an Owner or Admin, and only an Owner can make an Owner. That
+        # one assignment is a manual CLI step, documented in the README:
         #
-        #   aws cognito-idp admin-add-user-to-group --group-name Admins
+        #   aws cognito-idp admin-add-user-to-group --group-name Owners
         #     --user-pool-id <CognitoUserPoolId> --username <email>
         #     --region <region>
         for group_name, precedence, group_description in (
+            (
+                "Owners",
+                0,
+                "Admin access, plus sole control of their own account and of "
+                "who else is an Owner",
+            ),
             ("Admins", 1, "Full access: manage users and sites"),
             ("Editors", 10, "Create and edit sites; no user management, no delete"),
             ("Viewers", 20, "Read-only access to the dashboard"),
@@ -785,8 +792,9 @@ function handler(event) {
                     "cognito-idp:AdminGetUser",
                     "cognito-idp:AdminListGroupsForUser",
                     "cognito-idp:ListUsers",
-                    # Counting the Admins group, so the handler can refuse to
-                    # let the last remaining admin demote themselves.
+                    # Counting the Owners and Admins groups, so the handler can
+                    # refuse to let the last remaining owner or admin demote
+                    # themselves.
                     "cognito-idp:ListUsersInGroup",
                 ],
                 resources=[user_pool.user_pool_arn],
@@ -925,6 +933,6 @@ function handler(event) {
             value=user_pool.user_pool_id,
             description=(
                 "Pass to `aws cognito-idp admin-create-user` and, for the first "
-                "user only, `admin-add-user-to-group --group-name Admins`"
+                "user only, `admin-add-user-to-group --group-name Owners`"
             ),
         )

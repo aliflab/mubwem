@@ -126,7 +126,7 @@
     host.appendChild(email.row);
 
     var adminBase = window.MUBWEM_ADMIN_API_URL || "";
-    if (!MubwemAuth.inAnyGroup(["Admins", "Editors"])) {
+    if (!MubwemAuth.inAnyGroup(["Owners", "Admins", "Editors"])) {
       email.detail.textContent =
         EMAIL_DETAIL + " Admins and Editors can mute alert email.";
       return;

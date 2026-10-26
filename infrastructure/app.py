@@ -27,6 +27,7 @@ ENV_OVERRIDES = {
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",
     "MUBWEM_CHECK_TIMEOUT_SEC": "checkTimeoutSec",
     "MUBWEM_CHECKS_TTL_DAYS": "checksTtlDays",
+    "MUBWEM_NOTIFICATIONS_TTL_DAYS": "notificationsTtlDays",
     "MUBWEM_SCHEDULE_EXPRESSION": "scheduleExpression",
     "MUBWEM_SCHEDULE_TIMEZONE": "scheduleTimezone",
     "MUBWEM_DISPLAY_TIMEZONE": "displayTimezone",

@@ -2,7 +2,7 @@
 
 Single CDK stack containing the whole Phase 1 (free tier) system:
 
-  EventBridge Scheduler (1 min) -> Checker Lambda -> DynamoDB (4 tables)
+  EventBridge Scheduler (1 min) -> Checker Lambda -> DynamoDB (6 tables)
                                          |
                                          +-> SES -> HTML alert email
                                          |    +-> bounce/complaint -> SNS topic
@@ -112,6 +112,9 @@ class MubwemStack(Stack):
         failure_threshold = int(self.node.try_get_context("failureThreshold") or 3)
         check_timeout_sec = int(self.node.try_get_context("checkTimeoutSec") or 8)
         checks_ttl_days = int(self.node.try_get_context("checksTtlDays") or 30)
+        notifications_ttl_days = int(
+            self.node.try_get_context("notificationsTtlDays") or 90
+        )
         schedule_expression = (
             self.node.try_get_context("scheduleExpression") or "rate(1 minute)"
         )
@@ -197,6 +200,23 @@ class MubwemStack(Stack):
             partition_key=dynamodb.Attribute(
                 name="settingKey", type=dynamodb.AttributeType.STRING
             ),
+            **common_table_kwargs,
+        )
+
+        # The notification bell's feed: one row per incident open and close,
+        # written by the checker, read by the status API. A single partition
+        # (feed="all") with a time-sortable sort key, so "newest across every
+        # site" is one Query. Expired by TTL after notificationsTtlDays.
+        notifications_table = dynamodb.Table(
+            self,
+            "NotificationsTable",
+            partition_key=dynamodb.Attribute(
+                name="feed", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="notificationId", type=dynamodb.AttributeType.STRING
+            ),
+            time_to_live_attribute="ttl",
             **common_table_kwargs,
         )
 
@@ -295,6 +315,8 @@ class MubwemStack(Stack):
                 "CURRENT_STATUS_TABLE": current_status_table.table_name,
                 "INCIDENTS_TABLE": incidents_table.table_name,
                 "SETTINGS_TABLE": settings_table.table_name,
+                "NOTIFICATIONS_TABLE": notifications_table.table_name,
+                "NOTIFICATIONS_TTL_DAYS": str(notifications_ttl_days),
                 "ALERT_TOPIC_ARN": alert_topic.topic_arn,
                 "ALERT_EMAIL": alert_email,
                 "SENDER_EMAIL": sender_email,
@@ -312,6 +334,7 @@ class MubwemStack(Stack):
         current_status_table.grant_read_write_data(checker_fn)
         incidents_table.grant_read_write_data(checker_fn)
         settings_table.grant_read_data(checker_fn)
+        notifications_table.grant(checker_fn, "dynamodb:PutItem")
         alert_topic.grant_publish(checker_fn)
 
         # One SendEmail call, two resources to authorise. SES evaluates the
@@ -673,6 +696,8 @@ function handler(event) {
                 "UPTIME_CHECKS_TABLE": uptime_checks_table.table_name,
                 "CURRENT_STATUS_TABLE": current_status_table.table_name,
                 "INCIDENTS_TABLE": incidents_table.table_name,
+                "NOTIFICATIONS_TABLE": notifications_table.table_name,
+                "NOTIFICATIONS_TTL_DAYS": str(notifications_ttl_days),
                 "FAILURE_THRESHOLD": str(failure_threshold),
             },
         )
@@ -681,6 +706,7 @@ function handler(event) {
         uptime_checks_table.grant_read_data(api_fn)
         current_status_table.grant_read_data(api_fn)
         incidents_table.grant_read_data(api_fn)
+        notifications_table.grant_read_data(api_fn)
 
         http_api = apigwv2.HttpApi(
             self,
@@ -731,6 +757,16 @@ function handler(event) {
             methods=[apigwv2.HttpMethod.GET],
             integration=apigw_integrations.HttpLambdaIntegration(
                 "SiteDetailIntegration", api_fn
+            ),
+            authorizer=dashboard_authorizer,
+        )
+
+        # Authenticated: the notification bell's feed, polled by every page.
+        http_api.add_routes(
+            path="/notifications",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=apigw_integrations.HttpLambdaIntegration(
+                "NotificationsIntegration", api_fn
             ),
             authorizer=dashboard_authorizer,
         )
@@ -845,6 +881,8 @@ function handler(event) {
             [
                 'window.MUBWEM_API_URL = "%s/status";' % http_api.api_endpoint,
                 'window.MUBWEM_ADMIN_API_URL = "%s/admin";' % http_api.api_endpoint,
+                'window.MUBWEM_NOTIFICATIONS_URL = "%s/notifications";'
+                % http_api.api_endpoint,
                 'window.MUBWEM_COGNITO_DOMAIN = "%s";' % user_pool_domain.base_url(),
                 'window.MUBWEM_COGNITO_CLIENT_ID = "%s";'
                 % user_pool_client.user_pool_client_id,

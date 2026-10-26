@@ -1,7 +1,7 @@
 /* MuBWeM page shell — the bootstrap every authenticated page shares.
  *
  * Signs in through auth.js, renders the side nav, fills in the session strip,
- * and optionally gates the page on a Cognito group before handing control to
+ * starts the notification bell (notifications.js), and optionally gates the page on a Cognito group before handing control to
  * the page's own code.
  *
  * Usage:
@@ -93,6 +93,7 @@ window.MubwemShell = (function () {
 
         setSignedInAs(claims);
         if (logout) logout.hidden = false;
+        if (window.MubwemNotifications) MubwemNotifications.start();
 
         if (opts.ready) opts.ready(claims, token);
         return token;

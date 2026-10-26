@@ -1,10 +1,11 @@
 """MuBWeM status API Lambda.
 
-Behind an API Gateway HTTP API, serving two routes from one function. Both
+Behind an API Gateway HTTP API, serving three routes from one function. All
 sit behind the Cognito JWT authorizer; there is no unauthenticated route:
 
   GET /status                  every site
   GET /status/{siteId}         one site, with full detail
+  GET /notifications           the bell's feed of incident opens and closes
 
 The list route returns everything the dashboard needs in one call, so the
 frontend does no joining of its own.
@@ -107,6 +108,31 @@ so the graph still spans the whole window.
 Sites are sorted down-first, then by name, so the dashboard can render in
 order without sorting.
 
+NOTIFICATIONS RESPONSE (GET /notifications[?limit=50][&before=<id>])
+
+{
+  "generatedAt":   "...",
+  "retentionDays": 90,
+  "notifications": [                          # newest first
+    {
+      "id":                "2026-08-26T21:58:10.004Z#example-home#incident_opened",
+      "kind":              "incident_opened" | "incident_resolved",
+      "createdAt":         "2026-08-26T21:58:10.004Z",
+      "siteId":            "example-home",
+      "siteName":          "Example Home",
+      "siteUrl":           "https://example.com",
+      "incidentStartedAt": "2026-08-26T21:58:10.004Z",
+      "reason":            "Timeout after 8s" | null,
+      "durationSec":       180 | null        # incident_resolved only
+    }
+  ],
+  "nextBefore": "<id>" | null                 # pass as ?before= for older ones
+}
+
+Rows are written by the checker with a TTL of `retentionDays`. DynamoDB
+deletes expired rows lazily (often days late), so this route also filters on
+createdAt itself - nothing older than the window is ever returned.
+
 There is no visibility filtering of any kind in this file: every caller has
 already been authenticated by the API Gateway authorizer, so every caller
 sees every site. A site that does not exist is a 404 on the detail route.
@@ -131,8 +157,14 @@ SITES_TABLE = os.environ["SITES_TABLE"]
 UPTIME_CHECKS_TABLE = os.environ["UPTIME_CHECKS_TABLE"]
 CURRENT_STATUS_TABLE = os.environ["CURRENT_STATUS_TABLE"]
 INCIDENTS_TABLE = os.environ["INCIDENTS_TABLE"]
+NOTIFICATIONS_TABLE = os.environ["NOTIFICATIONS_TABLE"]
 
 FAILURE_THRESHOLD = int(os.environ.get("FAILURE_THRESHOLD", "3"))
+NOTIFICATIONS_TTL_DAYS = int(os.environ.get("NOTIFICATIONS_TTL_DAYS", "90"))
+# The checker writes every notification under this one partition key.
+NOTIFICATION_FEED = "all"
+NOTIFICATIONS_DEFAULT_LIMIT = 50
+NOTIFICATIONS_MAX_LIMIT = 100
 INCIDENTS_PER_SITE = 5
 # The detail page shows a real history rather than a teaser.
 INCIDENTS_DETAIL_LIMIT = 50
@@ -147,6 +179,7 @@ MAX_DETAIL_POINTS = 500
 # The list route's path, as API Gateway reports it. Only used to recover a
 # siteId from rawPath when pathParameters is absent.
 LIST_PATH = "/status"
+NOTIFICATIONS_PATH = "/notifications"
 
 _dynamodb = boto3.resource(
     "dynamodb", config=Config(retries={"max_attempts": 3, "mode": "standard"})
@@ -155,6 +188,7 @@ sites_table = _dynamodb.Table(SITES_TABLE)
 checks_table = _dynamodb.Table(UPTIME_CHECKS_TABLE)
 status_table = _dynamodb.Table(CURRENT_STATUS_TABLE)
 incidents_table = _dynamodb.Table(INCIDENTS_TABLE)
+notifications_table = _dynamodb.Table(NOTIFICATIONS_TABLE)
 
 
 def _iso(dt):
@@ -581,6 +615,77 @@ def build_site_payload(site_id):
     }
 
 
+def build_notifications_payload(params):
+    """One page of the notification feed, newest first.
+
+    `before` is the cursor: the id of the oldest notification the caller
+    already has. Ids sort by time (ISO prefix), so "older than" is a plain
+    key-condition `lt` on the sort key.
+    """
+    now = datetime.now(timezone.utc)
+    oldest = _iso(now - timedelta(days=NOTIFICATIONS_TTL_DAYS))
+
+    try:
+        limit = int(params.get("limit") or NOTIFICATIONS_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = NOTIFICATIONS_DEFAULT_LIMIT
+    limit = max(1, min(limit, NOTIFICATIONS_MAX_LIMIT))
+
+    before = params.get("before")
+    if before and str(before) <= oldest:
+        # Already past the retention window; BETWEEN would also refuse a
+        # lower bound above its upper one.
+        return {
+            "generatedAt": _iso(now),
+            "retentionDays": NOTIFICATIONS_TTL_DAYS,
+            "notifications": [],
+            "nextBefore": None,
+        }
+    condition = Key("feed").eq(NOTIFICATION_FEED)
+    if before:
+        condition = condition & Key("notificationId").between(oldest, str(before))
+    else:
+        condition = condition & Key("notificationId").gte(oldest)
+
+    response = notifications_table.query(
+        KeyConditionExpression=condition,
+        ScanIndexForward=False,
+        # One extra row tells us whether there is an older page.
+        Limit=limit + 1,
+    )
+    items = [i for i in response.get("Items", []) if i["notificationId"] != before]
+    more = len(items) > limit or "LastEvaluatedKey" in response
+    items = items[:limit]
+
+    return {
+        "generatedAt": _iso(now),
+        "retentionDays": NOTIFICATIONS_TTL_DAYS,
+        "notifications": [
+            {
+                "id": item["notificationId"],
+                "kind": item.get("kind"),
+                "createdAt": item.get("createdAt"),
+                "siteId": item.get("siteId"),
+                "siteName": item.get("siteName") or item.get("siteId"),
+                "siteUrl": item.get("siteUrl"),
+                "incidentStartedAt": item.get("incidentStartedAt"),
+                "reason": item.get("reason"),
+                "durationSec": _plain(item.get("durationSec")),
+            }
+            for item in items
+        ],
+        "nextBefore": items[-1]["notificationId"] if more and items else None,
+    }
+
+
+def _route_path(event):
+    raw = event.get("rawPath")
+    if not isinstance(raw, str) or not raw:
+        http = (event.get("requestContext") or {}).get("http")
+        raw = http.get("path") if isinstance(http, dict) else ""
+    return (raw or "").rstrip("/")
+
+
 def _response(status_code, body):
     return {
         "statusCode": status_code,
@@ -609,11 +714,7 @@ def _site_id_from(event):
 
     # No pathParameters (some invocation shapes omit them). Fall back to the
     # raw path, which for the detail route is /status/<id>.
-    raw = event.get("rawPath")
-    if not isinstance(raw, str) or not raw:
-        http = (event.get("requestContext") or {}).get("http")
-        raw = http.get("path") if isinstance(http, dict) else ""
-    raw = (raw or "").rstrip("/")
+    raw = _route_path(event)
 
     if raw.startswith(LIST_PATH + "/"):
         return urllib.parse.unquote(raw[len(LIST_PATH) + 1 :]) or None
@@ -621,6 +722,14 @@ def _site_id_from(event):
 
 
 def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda
+    if isinstance(event, dict) and _route_path(event) == NOTIFICATIONS_PATH:
+        try:
+            params = event.get("queryStringParameters") or {}
+            return _response(200, build_notifications_payload(params))
+        except Exception:  # noqa: BLE001 - always answer the dashboard with JSON
+            logger.exception("Failed to build notifications payload")
+            return _response(500, {"error": "internal error building notifications"})
+
     site_id = _site_id_from(event)
     try:
         if site_id is None:

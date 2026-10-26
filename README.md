@@ -33,9 +33,9 @@ This repo is **Phase 1: the free tier test build**. It is a portfolio project �
 > topology: no Cognito, no JWT authorizer, no `AdminFunction`, and only three
 > pages hanging off CloudFront instead of eight.
 
-### The five tables
+### The six tables
 
-All five are on-demand (`PAY_PER_REQUEST`).
+All six are on-demand (`PAY_PER_REQUEST`).
 
 | Table | Keys | What it holds |
 |---|---|---|
@@ -44,6 +44,7 @@ All five are on-demand (`PAY_PER_REQUEST`).
 | **CurrentStatus** | PK `siteId` | `currentStatus`, `lastCheckedAt`, `lastResponseTimeMs`, `consecutiveFailures`, `lastStatusChangeAt` |
 | **Incidents** | PK `siteId`, SK `startedAt` (ISO8601) | `endedAt` (null while ongoing), `durationSec`, `triggerReason`, `resolved` |
 | **Settings** | PK `settingKey` | one row, `notifications`: `emailAlertsEnabled`, `updatedAt`, `updatedBy` — the alert-email mute |
+| **Notifications** | PK `feed` (always `all`), SK `notificationId` (`<ISO8601>#<siteId>#<kind>`) | `kind` (`incident_opened`/`incident_resolved`), `siteName`, `siteUrl`, `reason`, `durationSec`, `ttl` — the bell's feed, TTL-expired after 90 days (`notificationsTtlDays`) |
 
 ### Checker flow
 
@@ -55,6 +56,8 @@ All five are on-demand (`PAY_PER_REQUEST`).
 4. Updates **CurrentStatus** in one atomic expression: `consecutiveFailures + 1` on failure, `0` on success. A failure leaves `currentStatus` as it was; it flips to `down` only on the check that reaches the threshold (a second, idempotent write), so an isolated blip never shows the site as down.
 5. When `consecutiveFailures` reaches the threshold (default **3**) **and** no incident is already open, opens an **Incident** and sends a `DOWN` alert.
 6. On the first success after an open incident, closes it (`endedAt`, `durationSec`, `resolved`) and sends a `RESOLVED` alert.
+
+Steps 5 and 6 also write a **Notifications** row, whether or not alert email is muted.
 
 Three consecutive failures is what stops a single flaky check from paging you. "No incident already open" is what stops a two-hour outage emailing every minute.
 
@@ -436,6 +439,7 @@ A brand-new user still holding the emailed temporary password gets a `NEW_PASSWO
 |---|---|---|
 | `GET /status` | Viewer | every site with status, 24h uptime, hourly history and recent incidents |
 | `GET /status/{siteId}` | Viewer | one site, plus its 24h check series and up to 50 incidents |
+| `GET /notifications` | Viewer | incident opened/resolved notifications, newest first; `?limit=` (max 100) and `?before=<id>` to page back through the retention window |
 | `GET /admin/sites` | Editor | every site as stored, admin view |
 | `POST /admin/sites` | Editor | create a site (starts disabled unless you say otherwise) |
 | `POST /admin/sites/preview` | Editor | suggest a monitor name from a URL's page title |

@@ -19,6 +19,7 @@
     "failureThreshold": 3,
     "checkTimeoutSec": 8,
     "checksTtlDays": 30,
+    "notificationsTtlDays": 90,
     "scheduleExpression": "rate(1 minute)",
     "scheduleTimezone": "Australia/Sydney",
     "displayTimezone": "Australia/Sydney",

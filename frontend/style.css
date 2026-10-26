@@ -1540,3 +1540,170 @@ a.button-link.primary:hover { background: #4f46e5; border-color: #4f46e5; color:
 .channel-off .channel-name { color: var(--muted); }
 
 .brand { display: flex; align-items: center; gap: 12px; }
+
+/* ==========================================================================
+   Notification bell — header button, dropdown, toasts (notifications.js)
+   ========================================================================== */
+.notif { position: relative; flex: none; }
+
+.notif-bell {
+  position: relative;
+  padding: 8px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--text-dim);
+}
+
+.notif-bell svg { width: 18px; height: 18px; display: block; }
+.notif-bell[aria-expanded="true"] { background: var(--bg-hover); border-color: var(--muted); }
+
+.notif-badge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 18px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #fff;
+  text-align: center;
+  border: 2px solid var(--bg-main);
+}
+
+.notif-badge-down { background: var(--down); }
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(520px, 75vh);
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: left;
+}
+
+.notif-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.notif-head h2 { margin: 0; font-size: 14px; }
+
+.notif-desktop { margin: 10px 14px 0; padding: 6px 11px; font-size: 12px; }
+
+.notif-list { list-style: none; margin: 0; padding: 4px 0; }
+
+.notif-link {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.notif-link:hover { background: var(--bg-hover); color: var(--text); }
+.notif-unread .notif-link { background: rgba(99, 102, 241, 0.08); }
+.notif-unread .notif-link:hover { background: var(--bg-hover); }
+
+.notif-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.notif-dot-down { background: var(--down); }
+.notif-dot-up { background: var(--up); }
+
+.notif-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.notif-title { font-size: 13px; font-weight: 600; }
+.notif-detail { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.notif-time { font-size: 11px; color: var(--muted); }
+
+.notif-empty { margin: 0; padding: 18px 14px; font-size: 13px; color: var(--muted); }
+.notif-more { margin: 4px 14px 0; padding: 6px 11px; font-size: 12px; }
+.notif-foot { margin: 0; padding: 10px 14px 12px; font-size: 11px; color: var(--muted); }
+
+.notif-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.notif-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 10px 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--up);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  animation: notif-in 0.2s ease-out;
+}
+
+.notif-toast-down { border-left-color: var(--down); }
+
+.notif-toast-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.notif-toast-link span { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.notif-toast-link:hover { color: var(--text); }
+.notif-toast-link:hover strong { text-decoration: underline; }
+
+.notif-toast-close {
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+@keyframes notif-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notif-toast { animation: none; }
+}
+
+@media (max-width: 640px) {
+  /* The header wraps here, so the bell can sit anywhere on the row; pin the
+     panel to the viewport instead of the button. */
+  .notif { position: static; }
+  .notif-panel { position: fixed; top: 72px; left: 16px; right: 16px; width: auto; }
+}

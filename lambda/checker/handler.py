@@ -16,6 +16,10 @@ unverified identity or a throttle must not cost an alert. Bounces and
 complaints cannot be seen from here at all; they are reported asynchronously
 to a separate SNS topic via the SES configuration set.
 
+Every incident open and close also writes a row to the Notifications table,
+the feed behind the dashboard's notification bell. That write is independent
+of the email mute and TTL'd after NOTIFICATIONS_TTL_DAYS.
+
 Alert email can be muted from the dashboard's Settings page. The flag lives in
 the Settings table, is read once per sweep, and fails open: a missing row or a
 failed read means email is on. Muting suppresses both SES and the SNS fallback;
@@ -53,11 +57,13 @@ CURRENT_STATUS_TABLE = os.environ["CURRENT_STATUS_TABLE"]
 INCIDENTS_TABLE = os.environ["INCIDENTS_TABLE"]
 ALERT_TOPIC_ARN = os.environ["ALERT_TOPIC_ARN"]
 SETTINGS_TABLE = os.environ["SETTINGS_TABLE"]
+NOTIFICATIONS_TABLE = os.environ["NOTIFICATIONS_TABLE"]
 
 FAILURE_THRESHOLD = int(os.environ.get("FAILURE_THRESHOLD", "3"))
 CHECK_TIMEOUT_SEC = int(os.environ.get("CHECK_TIMEOUT_SEC", "8"))
 CHECKS_TTL_DAYS = int(os.environ.get("CHECKS_TTL_DAYS", "30"))
 CHECK_REGION = os.environ.get("CHECK_REGION", "unknown")
+NOTIFICATIONS_TTL_DAYS = int(os.environ.get("NOTIFICATIONS_TTL_DAYS", "90"))
 
 # Alert delivery. ALERT_EMAIL/SENDER_EMAIL are what SES needs; without them
 # the checker still alerts, just through SNS in plain text. DASHBOARD_URL is
@@ -84,9 +90,15 @@ checks_table = _dynamodb.Table(UPTIME_CHECKS_TABLE)
 status_table = _dynamodb.Table(CURRENT_STATUS_TABLE)
 incidents_table = _dynamodb.Table(INCIDENTS_TABLE)
 settings_table = _dynamodb.Table(SETTINGS_TABLE)
+notifications_table = _dynamodb.Table(NOTIFICATIONS_TABLE)
 
 # The one Settings row this function reads. Written by the admin API.
 NOTIFICATION_SETTINGS_KEY = "notifications"
+
+# Every notification lives in one partition, so "newest first across all
+# sites" is a single Query. Fine at a handful of incidents a day; the API reads
+# the same constant.
+NOTIFICATION_FEED = "all"
 
 
 # ----------------------------------------------------------------------------
@@ -334,6 +346,35 @@ def close_incident(incident, result, checked_at):
     return duration
 
 
+def record_notification(kind, result, checked_at, incident_started_at, **extra):
+    """Append one row to the notification feed. Never raises.
+
+    notificationId is checkedAt + siteId + kind: it sorts by time because the
+    ISO prefix is fixed-width, and the suffix keeps two sites that transition
+    in the same millisecond from overwriting each other. A lost notification
+    is a missed bell, not a missed alert, so a failed write is only logged.
+    """
+    ttl = int((_now() + timedelta(days=NOTIFICATIONS_TTL_DAYS)).timestamp())
+    item = {
+        "feed": NOTIFICATION_FEED,
+        "notificationId": "%s#%s#%s" % (checked_at, result["siteId"], kind),
+        "createdAt": checked_at,
+        "kind": kind,
+        "siteId": result["siteId"],
+        "siteName": result["name"],
+        "siteUrl": result["url"],
+        "incidentStartedAt": incident_started_at,
+        "ttl": ttl,
+    }
+    item.update({k: v for k, v in extra.items() if v is not None})
+    try:
+        notifications_table.put_item(Item=item)
+    except Exception:  # noqa: BLE001 - never let the feed kill the sweep
+        logger.exception(
+            "Failed to record %s notification for %s", kind, result["siteId"]
+        )
+
+
 def publish_alert(subject, message):
     try:
         _sns.publish(
@@ -401,8 +442,8 @@ def send_alert(subject, text_body, html_body):
 def handle_transitions(result, status_item, checked_at, email_enabled=True):
     """Open or close incidents based on the freshly-written status row.
 
-    email_enabled only gates the send. The incident itself opens and closes
-    regardless, so dedup is unaffected: unmuting mid-outage sends no late DOWN
+    email_enabled only gates the send. The incident itself opens and closes,
+    and its bell notification is recorded, regardless, so dedup is unaffected: unmuting mid-outage sends no late DOWN
     mail, but the RESOLVED mail does go out.
     """
     site_id = result["siteId"]
@@ -414,6 +455,9 @@ def handle_transitions(result, status_item, checked_at, email_enabled=True):
         if failures >= FAILURE_THRESHOLD and open_inc is None:
             reason = result["error"] or "HTTP %s" % result["statusCode"]
             open_incident(result, checked_at, failures)
+            record_notification(
+                "incident_opened", result, checked_at, checked_at, reason=reason
+            )
             if not email_enabled:
                 logger.info("Email alerts muted; skipped DOWN alert for %s", site_id)
                 return "incident_opened"
@@ -434,6 +478,14 @@ def handle_transitions(result, status_item, checked_at, email_enabled=True):
 
     if open_inc is not None:
         duration = close_incident(open_inc, result, checked_at)
+        record_notification(
+            "incident_resolved",
+            result,
+            checked_at,
+            open_inc["startedAt"],
+            reason=open_inc.get("rootCause") or open_inc.get("triggerReason"),
+            durationSec=Decimal(duration),
+        )
         if not email_enabled:
             logger.info("Email alerts muted; skipped RESOLVED alert for %s", site_id)
             return "incident_closed"

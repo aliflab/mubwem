@@ -238,8 +238,9 @@ window.MubwemNotifications = (function () {
     nodes.bell.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) {
       renderList();
-      // Opening the panel is reading it. The highlight on unread rows stays
-      // for as long as it is open, because renderList ran first.
+    } else {
+      // Having opened the panel is reading it. Marking on close (not open)
+      // keeps the unread highlight and the "Mark all read" button live meanwhile.
       markAllRead();
     }
   }
@@ -247,6 +248,7 @@ window.MubwemNotifications = (function () {
   function markAllRead() {
     if (state.items.length) setMarker(SEEN_KEY, state.items[0].id);
     renderBadge();
+    if (state.open) renderList();
   }
 
   function renderBadge() {

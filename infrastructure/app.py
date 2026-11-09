@@ -24,6 +24,7 @@ ENV_OVERRIDES = {
     "MUBWEM_ALERT_EMAIL": "alertEmail",
     "MUBWEM_SENDER_EMAIL": "senderEmail",
     "MUBWEM_BOUNCE_ALERT_EMAIL": "bounceAlertEmail",
+    "MUBWEM_OWNER_EMAIL": "ownerEmail",
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",
     "MUBWEM_CHECK_TIMEOUT_SEC": "checkTimeoutSec",
     "MUBWEM_CHECKS_TTL_DAYS": "checksTtlDays",

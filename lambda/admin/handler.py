@@ -45,10 +45,11 @@ results in access being granted.
 
 Roles:
 
-  Owners   everything an Admin can do, plus: only an Owner can make someone
-           an Owner, and an Owner's account can be changed by that Owner
-           alone - no other user, Owner or Admin, can change its role,
-           disable it, delete it or resend its invite
+  Owners   everything an Admin can do, plus: an Owner's account can be
+           changed by that Owner alone - no other user, Owner or Admin, can
+           change its role, disable it, delete it or resend its invite.
+           Only the primary Owner (the oldest account in Owners, see
+           _primary_owner()) can make someone an Owner.
   Admins   everything - manage users, and create/edit/delete sites
   Editors  create and edit sites, mute/unmute alert email, resolve
            incidents by hand; no user
@@ -160,9 +161,8 @@ def _user_groups(event):
 
 
 # Owners hold every Admin permission, so each set that names Admins names
-# Owners too. OWNER_ONLY is for the few decisions about Owner accounts
-# themselves - see _owner_guard().
-OWNER_ONLY = {"Owners"}
+# Owners too. Decisions about Owner accounts themselves are _owner_guard()
+# and _primary_owner_guard().
 ADMIN_ONLY = {"Owners", "Admins"}
 CAN_WRITE_SITES = {"Owners", "Admins", "Editors"}
 
@@ -1094,12 +1094,66 @@ def _owner_guard(event, username):
     return None
 
 
+def _primary_owner():
+    """Username of the primary Owner: the oldest account in Owners.
+
+    Derived from Cognito, never stored, so there is nothing to drift. If the
+    primary Owner steps down, the next-oldest Owner becomes primary. Returns
+    None on any error or an empty group - and None matches no caller, so a
+    failure here means nobody can assign Owner, never that anybody can.
+    """
+    try:
+        owners = []
+        kwargs = {
+            "UserPoolId": USER_POOL_ID,
+            "GroupName": ROLE_TO_GROUP["Owner"],
+            "Limit": USERS_PER_PAGE,
+        }
+        for _ in range(MAX_USER_PAGES):
+            page = cognito.list_users_in_group(**kwargs)
+            owners.extend(page.get("Users", []))
+            token = page.get("NextToken")
+            if not token:
+                break
+            kwargs["NextToken"] = token
+        if not owners:
+            return None
+        # Username breaks a tie, so two Owners created in the same second
+        # still give one answer.
+        first = min(owners, key=lambda u: (u["UserCreateDate"], u["Username"]))
+        return first["Username"]
+    except Exception:  # noqa: BLE001 - fail closed on anything at all
+        logger.exception("Could not determine the primary Owner")
+        return None
+
+
+def _primary_owner_guard(event):
+    """403 unless the caller is the primary Owner. Positive evidence only."""
+    claims = _caller(event)
+    caller_ids = {
+        str(claims.get(k) or "").strip().lower()
+        for k in ("sub", "cognito:username", "email")
+    }
+    caller_ids.discard("")
+    primary = _primary_owner()
+    if (
+        "Owners" in _user_groups(event)
+        and primary
+        and primary.strip().lower() in caller_ids
+    ):
+        return None
+    return _response(
+        403, {"error": "only the primary Owner can make someone an Owner"}
+    )
+
+
 def _handle_list_users(event):
     denied = _require(event, ADMIN_ONLY)
     if denied:
         return denied
 
     users = []
+    primary = _primary_owner()
     kwargs = {"UserPoolId": USER_POOL_ID, "Limit": USERS_PER_PAGE}
     for _ in range(MAX_USER_PAGES):
         page = cognito.list_users(**kwargs)
@@ -1114,6 +1168,7 @@ def _handle_list_users(event):
                     "status": user.get("UserStatus"),
                     "createdAt": user.get("UserCreateDate"),
                     "groups": groups,
+                    "primaryOwner": username == primary,
                     # First recognised group wins; precedence in the pool is
                     # what makes that deterministic if there is ever more
                     # than one.
@@ -1142,10 +1197,10 @@ def _handle_create_user(event):
         raise Invalid("a valid email is required")
     email = email.strip().lower()
     group = _role_to_group(payload.get("role"))
-    if group == ROLE_TO_GROUP["Owner"] and _require(event, OWNER_ONLY):
-        return _response(
-            403, {"error": "only an Owner can make someone an Owner"}
-        )
+    if group == ROLE_TO_GROUP["Owner"]:
+        denied = _primary_owner_guard(event)
+        if denied:
+            return denied
 
     try:
         created = cognito.admin_create_user(
@@ -1316,10 +1371,10 @@ def _handle_update_user(event):
     new_group = _role_to_group(payload["role"]) if "role" in payload else None
     owner_group = ROLE_TO_GROUP["Owner"]
 
-    if new_group == owner_group and _require(event, OWNER_ONLY):
-        return _response(
-            403, {"error": "only an Owner can make someone an Owner"}
-        )
+    if new_group == owner_group:
+        denied = _primary_owner_guard(event)
+        if denied:
+            return denied
 
     # Last-owner and last-admin guards. Self-demotion only: changing someone
     # else's role leaves the caller where they were, so the invariants "at

@@ -487,12 +487,14 @@ class MubwemStack(Stack):
         #
         # Chicken and egg: the very first user cannot be put in Owners through
         # the admin panel, because reaching the admin panel requires already
-        # being an Owner or Admin, and only an Owner can make an Owner. That
-        # one assignment is a manual CLI step, documented in the README:
+        # being an Owner or Admin, and only an Owner can make an Owner. The
+        # optional `ownerEmail` setting below does it at deploy time; without
+        # it, the manual CLI step in the README still works:
         #
         #   aws cognito-idp admin-add-user-to-group --group-name Owners
         #     --user-pool-id <CognitoUserPoolId> --username <email>
         #     --region <region>
+        groups = {}
         for group_name, precedence, group_description in (
             (
                 "Owners",
@@ -504,7 +506,7 @@ class MubwemStack(Stack):
             ("Editors", 10, "Create and edit sites; no user management, no delete"),
             ("Viewers", 20, "Read-only access to the dashboard"),
         ):
-            cognito.CfnUserPoolGroup(
+            groups[group_name] = cognito.CfnUserPoolGroup(
                 self,
                 group_name + "Group",
                 user_pool_id=user_pool.user_pool_id,
@@ -512,6 +514,38 @@ class MubwemStack(Stack):
                 precedence=precedence,
                 description=group_description,
             )
+
+        # The primary Owner, created by the deploy. Optional, and skipped while
+        # it is a placeholder, so an already-bootstrapped stack is unaffected.
+        # Only the primary Owner - the oldest account in Owners, see
+        # _primary_owner() in lambda/admin/handler.py - can make more Owners.
+        owner_email = self.node.try_get_context("ownerEmail")
+        if owner_email and "CHANGE_ME" not in str(owner_email):
+            owner_email = str(owner_email).strip().lower()
+            owner_user = cognito.CfnUserPoolUser(
+                self,
+                "PrimaryOwnerUser",
+                user_pool_id=user_pool.user_pool_id,
+                username=owner_email,
+                user_attributes=[
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email", value=owner_email
+                    ),
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email_verified", value="true"
+                    ),
+                ],
+                # Cognito generates the temporary password and emails it.
+                desired_delivery_mediums=["EMAIL"],
+            )
+            owner_link = cognito.CfnUserPoolUserToGroupAttachment(
+                self,
+                "PrimaryOwnerInOwners",
+                user_pool_id=user_pool.user_pool_id,
+                group_name="Owners",
+                username=owner_user.ref,
+            )
+            owner_link.add_dependency(groups["Owners"])
 
         # ------------------------------------------------------------------
         # Frontend: private S3 bucket behind CloudFront (origin access control)

@@ -1,7 +1,7 @@
 /* MuBWeM team members — the user half of what used to be admin.html.
  *
  * User management is Owners and Admins only. Owner accounts are the exception
- * within that: only an Owner can make someone an Owner, and an Owner's row can
+ * within that: only the primary Owner can make someone an Owner, and an Owner's row can
  * be changed by that Owner alone, so for everyone else it is drawn read-only
  * with no actions. An Editor can reach this page (the nav links it, since the nav item is
  * shared with monitor management) but sees an explanatory note instead of the
@@ -22,8 +22,12 @@
 
   var ADMIN_BASE = window.MUBWEM_ADMIN_API_URL || "";
 
-  // Set in ready(). Decides whether Owner is offered as a role to assign.
-  var isOwner = false;
+  // Set in load(), from the API's primaryOwner flag on the caller's own row.
+  // Decides whether Owner is offered as a role to assign.
+  var canAssignOwner = false;
+  // The create form's Owner option, detached until canAssignOwner is known.
+  var ownerOption = null;
+  var ownerOptionParent = null;
 
   var el = {
     overall: document.getElementById("overall"),
@@ -68,7 +72,7 @@
     // Someone else's Owner account: nobody but that Owner can change it, so
     // there is nothing to offer — a plain label, no actions.
     if (user.role === "Owner" && !isMe(user)) {
-      row.appendChild(text("td", null, "Owner"));
+      row.appendChild(text("td", null, user.primaryOwner ? "Owner (primary)" : "Owner"));
       row.appendChild(
         text("td", null, user.enabled ? user.status || "—" : "DISABLED")
       );
@@ -81,7 +85,8 @@
     var roleCell = text("td", null, null);
     var select = document.createElement("select");
     select.className = "role-select";
-    (isOwner
+    // An Owner's own row keeps Owner so the current role shows selected.
+    (canAssignOwner || user.role === "Owner"
       ? ["Owner", "Admin", "Editor", "Viewer"]
       : ["Admin", "Editor", "Viewer"]
     ).forEach(function (role) {
@@ -188,6 +193,12 @@
     return api("GET", "/users")
       .then(function (payload) {
         var users = payload.users || [];
+        canAssignOwner = users.some(function (user) {
+          return user.primaryOwner && isMe(user);
+        });
+        if (canAssignOwner && ownerOption && !ownerOption.parentNode) {
+          ownerOptionParent.insertBefore(ownerOption, ownerOptionParent.firstChild);
+        }
         el.rows.innerHTML = "";
         users.forEach(function (user) {
           el.rows.appendChild(renderRow(user));
@@ -257,14 +268,16 @@
         return;
       }
 
-      isOwner = MubwemAuth.inAnyGroup(["Owners"]);
+      var isOwner = MubwemAuth.inAnyGroup(["Owners"]);
       el.overall.textContent = isOwner ? "Signed in as Owner" : "Signed in as Admin";
       el.overall.className = "overall overall-up";
 
-      // The create form ships with an Owner option; only an Owner may use it.
-      if (!isOwner) {
-        var ownerOption = el.form.querySelector('option[value="Owner"]');
-        if (ownerOption) ownerOption.parentNode.removeChild(ownerOption);
+      // The create form ships with an Owner option; only the primary Owner
+      // may use it, which load() learns from the user list.
+      ownerOption = el.form.querySelector('option[value="Owner"]');
+      if (ownerOption) {
+        ownerOptionParent = ownerOption.parentNode;
+        ownerOptionParent.removeChild(ownerOption);
       }
 
       el.panel.hidden = false;

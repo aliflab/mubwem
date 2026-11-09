@@ -174,14 +174,14 @@ Four Cognito **user pool groups**, created by the stack. A user's group arrives 
 
 | Role | Sites | Alert-email mute | Users | Dashboard |
 |---|---|---|---|---|
-| **Owners** | create, edit, **delete** | read, change | everything Admins can, plus assigning the Owner role; their own account can be changed by no one else | yes |
+| **Owners** | create, edit, **delete** | read, change | everything Admins can; their own account can be changed by no one else. Only the **primary Owner** assigns the Owner role | yes |
 | **Admins** | create, edit, **delete** | read, change | create, change role, enable/disable, delete — except Owners | yes |
 | **Editors** | create, edit — **no delete** | read, change | no access | yes |
 | **Viewers** | no access | no access | no access | yes, read-only |
 
 An Editor who needs a site to stop being checked turns its `enabled` toggle off; deletion has a larger blast radius, so it stays with Owners and Admins. Group precedence is `Owners` 0, `Admins` 1, `Editors` 10, `Viewers` 20 (lower wins), so multiple memberships resolve predictably.
 
-**Owner accounts belong to their Owner.** Only an Owner can create an Owner or promote someone to Owner. No one else — not an Admin, not another Owner — can change an Owner's role, disable, delete or resend their invite (`403`, enforced by `_owner_guard()`). An Owner can step down to another role, unless they are the last Owner (`409`), so ownership is handed over by promoting someone first. The flip side: an Owner who has left can only be removed by themselves or with the AWS CLI.
+**Owner accounts belong to their Owner.** Only the primary Owner (the oldest `Owners` account) can create an Owner or promote someone to Owner. No one else — not an Admin, not another Owner — can change an Owner's role, disable, delete or resend their invite (`403`, enforced by `_owner_guard()`). An Owner can step down to another role, unless they are the last Owner (`409`), so ownership is handed over by promoting someone first. The flip side: an Owner who has left can only be removed by themselves or with the AWS CLI.
 
 ### Where the enforcement is
 
@@ -195,7 +195,13 @@ Two self-inflicted lockouts are blocked, both with a 409: an admin cannot disabl
 
 ### Bootstrapping the first admin
 
-Groups can only be assigned through the admin panel, and reaching it requires already being an Owner or Admin — and only an Owner can make an Owner, so the first user goes straight into `Owners`. The first user therefore has no group, and one manual CLI call is unavoidable:
+Groups can only be assigned through the admin panel, and reaching it requires already being an Owner or Admin, so the first user has to go straight into `Owners`.
+
+**On a new deployment**, set `ownerEmail` (`-c ownerEmail=you@example.com`, or `MUBWEM_OWNER_EMAIL` in `.env`) for the first `cdk deploy`. The stack creates that user in `Owners`, and Cognito emails them a temporary password. Leave it unset on a stack whose first Owner already exists — creating a user already in the pool fails the deploy.
+
+That first account is the **primary Owner**: the oldest account in `Owners`, worked out from Cognito on each request rather than stored. Only the primary Owner can create an Owner or promote someone to Owner. If the primary Owner steps down, the next-oldest Owner becomes primary.
+
+**Without `ownerEmail`** (or on an existing stack), the manual CLI call still works:
 
 ```bash
 aws cognito-idp admin-add-user-to-group \
@@ -670,7 +676,7 @@ curl -s "$API/admin/users" -H "Authorization: Bearer $TOKEN"
 }
 ```
 
-`role` is `Owner`, `Admin`, `Editor`, `Viewer` or `null` (in no group). `status` is Cognito's own user status — `FORCE_CHANGE_PASSWORD` until a new user first signs in. `createdAt` comes straight from Cognito, so unlike every other timestamp in the API it is not in the `...Z` format. Lists up to 300 users.
+`role` is `Owner`, `Admin`, `Editor`, `Viewer` or `null` (in no group). `primaryOwner` is `true` on exactly one Owner, the oldest. `status` is Cognito's own user status — `FORCE_CHANGE_PASSWORD` until a new user first signs in. `createdAt` comes straight from Cognito, so unlike every other timestamp in the API it is not in the `...Z` format. Lists up to 300 users.
 
 #### `POST /admin/users` — create a user
 
@@ -680,7 +686,7 @@ curl -s -X POST "$API/admin/users" \
   -d '{"email": "teammate@example.com", "role": "Editor"}'
 ```
 
-`email` is required and becomes the username (lowercased). `role` is `Owner`, `Admin`, `Editor` or `Viewer`, case-insensitive; only an Owner may pass `Owner` (`403` otherwise). Cognito emails the user a temporary password that is generated server-side and never returned to you. Returns `201 {"user": {"username", "email", "role", "enabled", "status"}}`; an existing email is `409`.
+`email` is required and becomes the username (lowercased). `role` is `Owner`, `Admin`, `Editor` or `Viewer`, case-insensitive; only the primary Owner may pass `Owner` (`403` otherwise). Cognito emails the user a temporary password that is generated server-side and never returned to you. Returns `201 {"user": {"username", "email", "role", "enabled", "status"}}`; an existing email is `409`.
 
 #### `PATCH /admin/users/{username}` — change role or enable/disable
 
@@ -690,7 +696,7 @@ curl -s -X PATCH "$API/admin/users/teammate%40example.com" \
   -d '{"role": "Viewer", "enabled": true}'
 ```
 
-Send `role`, `enabled`, or both. Returns `200 {"user": {"username", "groups", "role"}}`. The change applies to the user's **next** sign-in — a token they already hold keeps its old role until it expires. `409` if you try to disable yourself, to leave `Owners` while you are the last owner, or to leave `Admins` while you are the last admin; `403` if the target is someone else's Owner account or you are not an Owner and pass `role: Owner`; `404` for an unknown user.
+Send `role`, `enabled`, or both. Returns `200 {"user": {"username", "groups", "role"}}`. The change applies to the user's **next** sign-in — a token they already hold keeps its old role until it expires. `409` if you try to disable yourself, to leave `Owners` while you are the last owner, or to leave `Admins` while you are the last admin; `403` if the target is someone else's Owner account or you are not the primary Owner and pass `role: Owner`; `404` for an unknown user.
 
 #### `DELETE /admin/users/{username}` — delete a user
 

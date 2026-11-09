@@ -1,7 +1,7 @@
 """MuBWeM admin API Lambda.
 
 Behind the same API Gateway HTTP API and the same Cognito JWT authorizer as
-GET /status, serving twelve routes from one function:
+GET /status, serving thirteen routes from one function:
 
   GET    /admin/users             list users and their role
   POST   /admin/users             create a user in a role
@@ -18,6 +18,9 @@ GET /status, serving twelve routes from one function:
 
   GET    /admin/settings          read deployment-wide notification settings
   PATCH  /admin/settings          mute or unmute alert email
+
+  POST   /admin/incidents/{siteId}/resolve
+                                  close an open incident by hand
 
 The last of those is the only route in this codebase that makes an outbound
 request to an address the caller chooses. It carries its own SSRF notice, in
@@ -47,7 +50,8 @@ Roles:
            alone - no other user, Owner or Admin, can change its role,
            disable it, delete it or resend its invite
   Admins   everything - manage users, and create/edit/delete sites
-  Editors  create and edit sites, mute/unmute alert email; no user
+  Editors  create and edit sites, mute/unmute alert email, resolve
+           incidents by hand; no user
            management, no site deletion
   Viewers  the read-only dashboard, and nothing here - a Viewer has no reason
            to reach any /admin/* route, not even a read-only one
@@ -82,11 +86,15 @@ logger.setLevel(logging.INFO)
 SITES_TABLE = os.environ["SITES_TABLE"]
 USER_POOL_ID = os.environ["USER_POOL_ID"]
 SETTINGS_TABLE = os.environ["SETTINGS_TABLE"]
+INCIDENTS_TABLE = os.environ["INCIDENTS_TABLE"]
+CURRENT_STATUS_TABLE = os.environ["CURRENT_STATUS_TABLE"]
 
 _boto_config = Config(retries={"max_attempts": 3, "mode": "standard"})
 _dynamodb = boto3.resource("dynamodb", config=_boto_config)
 sites_table = _dynamodb.Table(SITES_TABLE)
 settings_table = _dynamodb.Table(SETTINGS_TABLE)
+incidents_table = _dynamodb.Table(INCIDENTS_TABLE)
+status_table = _dynamodb.Table(CURRENT_STATUS_TABLE)
 cognito = boto3.client("cognito-idp", config=_boto_config)
 
 # Site fields a client is allowed to set. Everything else on a Sites item -
@@ -941,6 +949,80 @@ def _handle_update_settings(event):
 
 
 # ---------------------------------------------------------------------------
+# Incident routes
+# ---------------------------------------------------------------------------
+def _handle_resolve_incident(event):
+    """Close an open incident by hand, e.g. a false alarm or a retired URL.
+
+    Same weight as editing a site, so the same groups. Sends no email and
+    writes no bell notification - a person did this, they already know.
+
+    The conditional update is the whole race story: if the checker closed it
+    first (the site recovered), this is a 409, not a second close.
+    """
+    denied = _require(event, CAN_WRITE_SITES)
+    if denied:
+        return denied
+
+    site_id = _path_param(event, "siteId")
+    started_at = _body(event).get("startedAt")
+    if not site_id or not isinstance(started_at, str) or not started_at:
+        raise Invalid("siteId and startedAt are required")
+
+    now = datetime.now(timezone.utc)
+    try:
+        started = datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        raise Invalid("startedAt must be an incident's startedAt timestamp")
+    duration = max(0, int((now - started).total_seconds()))
+
+    resolved_by = _caller(event).get("email") or _caller(event).get("cognito:username")
+    try:
+        result = incidents_table.update_item(
+            Key={"siteId": site_id, "startedAt": started_at},
+            UpdateExpression=(
+                "SET endedAt = :ended, durationSec = :dur, resolved = :true, "
+                "resolvedBy = :by"
+            ),
+            ConditionExpression="attribute_exists(startedAt) AND resolved = :false",
+            ExpressionAttributeValues={
+                ":ended": _iso(now),
+                ":dur": duration,
+                ":true": True,
+                ":false": False,
+                ":by": str(resolved_by or "unknown"),
+            },
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _response(409, {"error": "no open incident at that time for %s" % site_id})
+        raise
+
+    # Down on the dashboard means an open incident, so clear both together.
+    # Resetting the counter means a still-failing site needs a fresh run of
+    # FAILURE_THRESHOLD failures to reopen, rather than reopening next sweep.
+    # "unknown", not "up": nothing has shown it working. Conditional so a
+    # missing status row is not conjured, and an "up" set by the checker in
+    # the meantime is not overwritten.
+    try:
+        status_table.update_item(
+            Key={"siteId": site_id},
+            UpdateExpression="SET consecutiveFailures = :zero, currentStatus = :unknown",
+            ConditionExpression="currentStatus = :down",
+            ExpressionAttributeValues={":zero": 0, ":unknown": "unknown", ":down": "down"},
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+    logger.info("Incident %s/%s resolved by hand by %s", site_id, started_at, resolved_by)
+    return _response(200, {"incident": _plain(result.get("Attributes", {}))})
+
+
+# ---------------------------------------------------------------------------
 # User routes
 # ---------------------------------------------------------------------------
 def _user_attribute(user, name):
@@ -1397,6 +1479,7 @@ ROUTES = {
     "POST /admin/sites/preview": _handle_preview_site,
     "GET /admin/settings": _handle_get_settings,
     "PATCH /admin/settings": _handle_update_settings,
+    "POST /admin/incidents/{siteId}/resolve": _handle_resolve_incident,
 }
 
 

@@ -20,6 +20,9 @@
   "use strict";
 
   var API_URL = MubwemDashboard.resolveApiUrl("MUBWEM_API_URL", "mubwem.apiUrl");
+  var ADMIN_BASE = window.MUBWEM_ADMIN_API_URL || "";
+  // Drawing the button is a convenience; lambda/admin/handler.py enforces it.
+  var canResolve = false;
   var POLL_MS = 60000;
 
   var el = {
@@ -29,7 +32,8 @@
     updated: document.getElementById("updated"),
     overall: document.getElementById("overall"),
     scopeNote: document.getElementById("scope-note"),
-    exportBtn: document.getElementById("export-csv")
+    exportBtn: document.getElementById("export-csv"),
+    actionsHead: document.getElementById("actions-head")
   };
 
   var incidents = [];
@@ -61,6 +65,7 @@
           startedMs: Date.parse(incident.startedAt),
           durationSec: incident.durationSec,
           resolved: incident.resolved,
+          resolvedBy: incident.resolvedBy || "",
           triggerReason: incident.triggerReason || ""
         });
       });
@@ -143,7 +148,21 @@
         )
       );
 
-      row.appendChild(text("td", "cell-reason", incident.triggerReason));
+      row.appendChild(
+        text(
+          "td",
+          "cell-reason",
+          incident.resolvedBy
+            ? incident.triggerReason + " — resolved by " + incident.resolvedBy
+            : incident.triggerReason
+        )
+      );
+
+      if (canResolve) {
+        var actionCell = text("td", null, null);
+        if (!incident.resolved) actionCell.appendChild(resolveButton(incident));
+        row.appendChild(actionCell);
+      }
       el.rows.appendChild(row);
     });
 
@@ -155,6 +174,38 @@
     } else {
       el.empty.hidden = true;
     }
+  }
+
+  function resolveButton(incident) {
+    var button = text("button", "link-button", "Resolve");
+    button.type = "button";
+    button.setAttribute("aria-label", "Resolve incident on " + incident.siteName);
+    button.addEventListener("click", function () {
+      if (
+        !window.confirm(
+          "Mark the incident on " + incident.siteName + " as resolved? " +
+            "If the site is still failing, a new incident opens after the next " +
+            "run of consecutive failures."
+        )
+      ) {
+        return;
+      }
+      button.disabled = true;
+      MubwemShell.clearError();
+      MubwemShell.apiFetch(
+        ADMIN_BASE + "/incidents/" + encodeURIComponent(incident.siteId) + "/resolve",
+        { method: "POST", body: { startedAt: incident.startedAt } }
+      )
+        .then(function () {
+          MubwemShell.showNotice("Incident on " + incident.siteName + " resolved.");
+        })
+        .catch(function (err) {
+          // A 409 means the checker closed it first; the refresh shows that.
+          MubwemShell.showError("Could not resolve incident: " + err.message);
+        })
+        .then(refresh);
+    });
+    return button;
   }
 
   /* ------------------------------------------------------------ CSV export
@@ -279,6 +330,9 @@
   MubwemShell.boot({
     page: "incidents",
     ready: function () {
+      canResolve =
+        !!ADMIN_BASE && MubwemAuth.inAnyGroup(["Owners", "Admins", "Editors"]);
+      el.actionsHead.hidden = !canResolve;
       el.filter.addEventListener("change", render);
       if (el.exportBtn) el.exportBtn.addEventListener("click", exportCsv);
       MubwemShell.onTimeZoneChange(render);

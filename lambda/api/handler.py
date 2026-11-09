@@ -47,7 +47,8 @@ LIST RESPONSE (GET /status)
           "endedAt":       "2026-08-26T22:01:10.004Z" | null,   # null = ongoing
           "durationSec":   180 | null,
           "triggerReason": "3 consecutive failures - Timeout after 8s",
-          "resolved":      true
+          "resolved":      true,
+          "resolvedBy":    "a@example.com" | null   # set only when resolved by hand
         }
       ]
     }
@@ -267,6 +268,7 @@ def recent_incidents(site_id, limit=INCIDENTS_PER_SITE):
             "durationSec": _plain(item.get("durationSec")),
             "triggerReason": item.get("triggerReason"),
             "resolved": bool(item.get("resolved", False)),
+            "resolvedBy": item.get("resolvedBy"),
         }
         for item in response.get("Items", [])
     ]

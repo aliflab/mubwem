@@ -802,14 +802,18 @@ function handler(event) {
             environment={
                 "SITES_TABLE": sites_table.table_name,
                 "SETTINGS_TABLE": settings_table.table_name,
+                "INCIDENTS_TABLE": incidents_table.table_name,
+                "CURRENT_STATUS_TABLE": current_status_table.table_name,
                 "USER_POOL_ID": user_pool.user_pool_id,
             },
         )
 
-        # Sites and Settings only. This function has no reason to read or
-        # write UptimeChecks, CurrentStatus or Incidents, so it cannot.
+        # Incidents and CurrentStatus for the manual resolve route only. No
+        # UptimeChecks: check history is the checker's alone.
         sites_table.grant_read_write_data(admin_fn)
         settings_table.grant_read_write_data(admin_fn)
+        incidents_table.grant_read_write_data(admin_fn)
+        current_status_table.grant_read_write_data(admin_fn)
 
         # Scoped to this pool's ARN, not "*": these actions on some other pool
         # in the account are not something this function should ever be able
@@ -863,6 +867,7 @@ function handler(event) {
                 [apigwv2.HttpMethod.PATCH, apigwv2.HttpMethod.DELETE],
             ),
             ("/admin/settings", [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.PATCH]),
+            ("/admin/incidents/{siteId}/resolve", [apigwv2.HttpMethod.POST]),
         ):
             http_api.add_routes(
                 path=admin_path,

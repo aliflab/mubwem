@@ -227,6 +227,8 @@ An earlier build had a per-site `isPublic` flag and an open `GET /public/status`
 
 ## Deploy
 
+> **No local tools?** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) is a browser-only runbook using AWS CloudShell — deploying into any account, troubleshooting, rollback and full removal.
+
 ### Prerequisites
 
 - An AWS account and credentials (`aws configure`, or `AWS_PROFILE`)

@@ -4,7 +4,7 @@ A step-by-step runbook for deploying MuBWeM from the GitHub repo into **any** AW
 
 The README's [Deploy](../README.md#deploy) section covers the same deploy from a local terminal. This document is the browser-only path, with every problem hit along the way and its fix.
 
-**Contents** — [Before you start](#before-you-start) · [1. Get the code](#1-get-the-code) · [2. Open CloudShell](#2-open-cloudshell-in-the-target-account) · [3. Prepare CloudShell](#3-prepare-cloudshell-once-per-account) · [4. Bootstrap](#4-bootstrap-cdk-once-per-account-and-region) · [5. Deploy](#5-deploy-two-passes-on-a-new-account) · [6. Confirm emails](#6-confirm-the-emails) · [7. Sign in](#7-sign-in-and-set-up) · [8. Find resources and costs](#8-find-every-mubwem-resource-and-its-cost) · [Updating](#updating-to-new-code) · [Troubleshooting](#troubleshooting) · [Rollback](#rollback) · [Deleting the app](#deleting-the-app)
+**Contents** — [Before you start](#before-you-start) · [1. Open CloudShell](#1-open-cloudshell-in-the-target-account) · [2. Prepare CloudShell](#2-prepare-cloudshell-once-per-account) · [3. Get the code](#3-get-the-code) · [4. Bootstrap](#4-bootstrap-cdk-once-per-account-and-region) · [5. Deploy](#5-deploy-two-passes-on-a-new-account) · [6. Confirm emails](#6-confirm-the-emails) · [7. Sign in](#7-sign-in-and-set-up) · [8. Find resources and costs](#8-find-every-mubwem-resource-and-its-cost) · [Updating](#updating-to-new-code) · [Troubleshooting](#troubleshooting) · [Rollback](#rollback) · [Deleting the app](#deleting-the-app)
 
 ---
 
@@ -13,7 +13,7 @@ The README's [Deploy](../README.md#deploy) section covers the same deploy from a
 You need:
 
 - **Console access to the target AWS account** with administrator-level permissions. The deploy creates IAM roles, Cognito, CloudFront, Lambda, DynamoDB, SES, SNS and S3.
-- **Access to the GitHub repo** (`github.com/aliflab/mubwem`) to download it as a zip.
+- **Read access to the GitHub repo** (`github.com/aliflab/mubwem`). If it is private, also a GitHub **personal access token** with read access to it (GitHub → Settings → Developer settings → Fine-grained tokens) — git asks for it in place of a password.
 - **An alert email address** whose inbox you can read. It receives the verification mails and every alert.
 - **An owner email address** for the first dashboard account. Usually the same address.
 
@@ -29,17 +29,7 @@ Placeholders used below — replace them with your own values:
 
 ---
 
-## 1. Get the code
-
-On GitHub, open the repo and choose **Code → Download ZIP**. You get `mubwem-main.zip`.
-
-Use the GitHub zip rather than zipping your local folder: it has no `.venv`, no `cdk.out` and, most importantly, no `.env` with someone else's settings.
-
-> The steps below assume a version of the repo that has the `passkeys` context flag (see [step 5](#5-deploy-two-passes-on-a-new-account)). Older versions cannot be deployed to a fresh account in one go.
-
----
-
-## 2. Open CloudShell in the target account
+## 1. Open CloudShell in the target account
 
 1. Sign in to the **target** AWS account in the browser.
 2. Set the region selector (top right) to `<REGION>`. **CloudShell deploys to whichever region it is opened in.**
@@ -54,20 +44,15 @@ Use the GitHub zip rather than zipping your local folder: it has no `.venv`, no 
 
 ---
 
-## 3. Prepare CloudShell (once per account)
+## 2. Prepare CloudShell (once per account)
 
-CloudShell keeps your home folder between sessions, so this section is done once. CloudShell deletes the home folder after **120 days without being opened** — if that happens, repeat this section. The deployed app itself is unaffected.
+Three CloudShell facts shape this section:
 
-### 3.1 Upload and unzip the code
+- **Only your home folder survives between sessions.** Anything installed system-wide — a `dnf` package, a global `npm` package — is gone the next time CloudShell starts. So every tool is either installed into the home folder or reinstalled automatically from `~/.bashrc`.
+- **The home folder is 1 GB.** The Python dependencies alone take 350–450 MB, so keep one copy of the code and no download caches.
+- **The home folder is deleted after 120 days without being opened.** If that happens, repeat sections 2 and 3. The deployed app itself is unaffected.
 
-**Actions → Upload file** → pick `mubwem-main.zip`, then:
-
-```bash
-unzip mubwem-main.zip
-cd mubwem-main
-```
-
-### 3.2 Fix the home folder permissions
+### 2.1 Fix the home folder permissions
 
 CloudShell's home folder is world-writable, and the CDK Python library refuses to use its package cache there (`Cannot use the jsii package cache ... mode 0777`). Lock it down, and disable that cache as a backstop:
 
@@ -79,7 +64,7 @@ echo 'export JSII_SILENCE_WARNING_DEPRECATED_NODE_VERSION=1' >> ~/.bashrc
 
 The second line only hides a "Node 20 is end-of-life" banner. It is a warning, not an error.
 
-### 3.3 Save your configuration
+### 2.2 Save your configuration
 
 Settings are read from `MUBWEM_*` environment variables, so saving them in `~/.bashrc` means every later command picks them up with no flags:
 
@@ -87,7 +72,6 @@ Settings are read from `MUBWEM_*` environment variables, so saving them in `~/.b
 echo 'export MUBWEM_ALERT_EMAIL=<ALERT_EMAIL>' >> ~/.bashrc
 # Optional - only if not ap-southeast-2. Must match the region CloudShell is open in.
 # echo 'export MUBWEM_REGION=<REGION>' >> ~/.bashrc
-source ~/.bashrc
 ```
 
 `MUBWEM_ALERT_EMAIL` is **required by every CDK command**, `cdk bootstrap` included — without it the stack refuses to load (`Context value 'alertEmail' must be set to a real address`).
@@ -96,25 +80,69 @@ Other optional settings (failure threshold, timeouts, timezone, separate sender 
 
 **Do not** put `MUBWEM_OWNER_EMAIL` in `.bashrc`. The owner is created once, on the first deploy, with a flag — see step 5.
 
-### 3.4 Install the tools
+### 2.3 Install the tools
+
+**Python 3.11.** CloudShell's default `python3` is older than the project needs, and a `dnf` install does not survive a restart — so `.bashrc` reinstalls it whenever it is missing:
 
 ```bash
-sudo dnf install -y python3.11
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r infrastructure/requirements.txt -r scripts/requirements.txt
+echo 'command -v python3.11 >/dev/null || sudo dnf install -y -q python3.11' >> ~/.bashrc
 ```
 
-CloudShell's default `python3` is older than the 3.11 the project needs, hence the explicit install.
+**The CDK CLI.** CloudShell ships a `cdk`, but it lags behind the CDK library pip installs, and then every command fails with `Cloud assembly schema version mismatch`. Updating the built-in one fails (`EACCES`) and would not survive a restart anyway. Install a current one into the home folder instead, and point `cdk` at it:
 
-The CDK CLI (`cdk`) is **already installed** in CloudShell. `npm install -g aws-cdk` fails there with `EACCES` — that is harmless. To update it anyway, use `sudo npm install -g aws-cdk`.
+```bash
+npm config set prefix ~/.npm-global
+npm install -g aws-cdk
+npm cache clean --force
+echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> ~/.bashrc
+echo 'alias cdk="$HOME/.npm-global/bin/cdk"' >> ~/.bashrc
+```
+
+The alias matters: activating the Python venv reorders `PATH`, and without it `cdk` can silently fall back to the old built-in CLI even though `cdk --version` showed the new one a moment earlier.
+
+**Load it all:**
+
+```bash
+source ~/.bashrc
+cdk --version
+```
+
+`cdk --version` should print `2.1148.0` or newer.
+
+---
+
+## 3. Get the code
+
+Clone the repo into the home folder. With git, an update is one `git pull`, and files deleted from the repo are deleted here too — re-uploading a zip leaves them behind, so a removed page would still be deployed.
+
+```bash
+cd ~
+git clone https://github.com/aliflab/mubwem.git
+cd mubwem
+```
+
+For a private repo, git asks for a username and password: give your GitHub username and the **personal access token** as the password. Your GitHub account password is not accepted.
+
+> The steps below need a version of the repo that has the `passkeys` context flag (see [step 5](#5-deploy-two-passes-on-a-new-account)). Older versions cannot be deployed to a fresh account in one go.
+
+Then install the Python dependencies into a venv inside the clone:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --no-cache-dir -r infrastructure/requirements.txt -r scripts/requirements.txt
+```
+
+`--no-cache-dir` stops pip keeping a second copy of every download, which the 1 GB home folder has no room for.
+
+**No git access from the account?** On GitHub choose **Code → Download ZIP**, then in CloudShell **Actions → Upload file**, `unzip mubwem-main.zip`, and use `~/mubwem-main` wherever this document says `~/mubwem`. Delete the zip afterwards to save space.
 
 ---
 
 ## 4. Bootstrap CDK (once per account and region)
 
 ```bash
-cd ~/mubwem-main/infrastructure
+cd ~/mubwem/infrastructure
 cdk bootstrap
 ```
 
@@ -237,27 +265,34 @@ Resources that cannot carry tags at all (the EventBridge schedule, the CloudFron
 
 ## Updating to new code
 
-1. Download a fresh zip from GitHub.
-2. In CloudShell:
+Every change — Lambda code, frontend pages, infrastructure or settings — goes live the same way: get the new code into CloudShell, then `cdk deploy`. CDK works out what changed and updates only that.
+
+1. **On your computer:** make the change, commit, and push to GitHub.
+2. **In CloudShell:**
 
    ```bash
-   rm -f ~/mubwem-main.zip
-   ```
-
-3. **Actions → Upload file** → the new zip, then:
-
-   ```bash
-   cd ~ && unzip -o mubwem-main.zip
-   cd mubwem-main && source .venv/bin/activate
-   pip install -r infrastructure/requirements.txt -r scripts/requirements.txt
+   cd ~/mubwem && source .venv/bin/activate
+   git pull
+   pip install --no-cache-dir -r infrastructure/requirements.txt -r scripts/requirements.txt
    cd infrastructure
    cdk diff        # optional: shows what will change, writes nothing
    cdk deploy
    ```
 
-`unzip -o` overwrites the code but keeps `.venv`. The `pip install` is a no-op unless the requirements changed.
+The `pip install` is a no-op unless the requirements changed. Plain `cdk deploy` — never `ownerEmail` or `passkeys=false` again.
 
-To change a setting, edit it in `~/.bashrc` (or pass `-c key=value` once), `source ~/.bashrc`, and `cdk deploy`.
+| You changed | What happens | Live |
+|---|---|---|
+| `lambda/*` | new code uploaded to the Lambda | immediately — the checker uses it on its next minute |
+| `frontend/*` | files re-uploaded to S3, CloudFront cache invalidated | 1–2 minutes; hard-refresh the browser (Ctrl+F5) |
+| `infrastructure/*` | CloudFormation updates those resources | when the deploy finishes — **read `cdk diff` first** |
+| a setting | edit it in `~/.bashrc`, `source ~/.bashrc`, deploy | when the deploy finishes |
+
+Before an infrastructure deploy, check `cdk diff` for any DynamoDB table, the user pool or the frontend bucket marked **replace** or **destroy**. All three are set to `DESTROY`, so replacing one deletes its data. Back up first ([below](#back-up-the-data-first)).
+
+`cdk.out` (CDK's build folder) is rebuilt on every deploy. If the home folder runs low, `rm -rf ~/mubwem/infrastructure/cdk.out` is always safe.
+
+If `cdk` fails with `Cloud assembly schema version mismatch` after a `pip install`, the library has moved ahead of the CLI again: `npm install -g aws-cdk && npm cache clean --force`.
 
 ---
 
@@ -267,10 +302,14 @@ Every error below was hit on a real deployment.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `npm error code EACCES ... /usr/lib/nodejs20/lib/node_modules/aws-cdk` | CloudShell's global npm folder is root-owned | Ignore — `cdk` is preinstalled. Or `sudo npm install -g aws-cdk` |
+| `npm error code EACCES ... /usr/lib/nodejs20/lib/node_modules/aws-cdk` | CloudShell's global npm folder is root-owned | Install the CLI into the home folder instead ([step 2.3](#23-install-the-tools)) |
+| `This CDK CLI is not compatible with the CDK library` / `Cloud assembly schema version mismatch` | The CLI is older than the CDK library pip installed | [Step 2.3](#23-install-the-tools). If `cdk --version` is new but the error persists, the alias is missing and `cdk` is the old built-in one — `which -a cdk` shows both |
+| `python3.11: command not found` | A new CloudShell session reset system packages | `sudo dnf install -y python3.11`; the `.bashrc` line in [step 2.3](#23-install-the-tools) does this automatically from then on |
+| `OSError: [Errno 28] No space left on device` | The 1 GB home folder is full — usually a second copy of the code, pip's cache or `cdk.out` | `du -sh ~/* ~/.[!.]*` to find it; `rm -rf ~/.cache/pip ~/mubwem/infrastructure/cdk.out` and any old copy; reinstall with `--no-cache-dir` |
+| `git clone` asks for a password and rejects it | Private repo, account password given | Use a GitHub personal access token as the password |
 | `Node 20 is end-of-life and not supported anymore` | CloudShell ships Node 20 | Warning only. Hidden by `JSII_SILENCE_WARNING_DEPRECATED_NODE_VERSION=1` |
-| `Cannot use the jsii package cache ... has a parent directory /home/cloudshell-user that is writable by group or others (mode 0777)` | CloudShell home is world-writable | [Step 3.2](#32-fix-the-home-folder-permissions) |
-| `Context value 'alertEmail' must be set to a real address` | `MUBWEM_ALERT_EMAIL` not set in this shell | [Step 3.3](#33-save-your-configuration), then `source ~/.bashrc` |
+| `Cannot use the jsii package cache ... has a parent directory /home/cloudshell-user that is writable by group or others (mode 0777)` | CloudShell home is world-writable | [Step 2.1](#21-fix-the-home-folder-permissions) |
+| `Context value 'alertEmail' must be set to a real address` | `MUBWEM_ALERT_EMAIL` not set in this shell | [Step 2.2](#22-save-your-configuration), then `source ~/.bashrc` |
 | `RelyingPartyId cannot be reserved domain other than User Pool's prefix domain` | First deploy to a new account with passkeys on | Deploy with `-c passkeys=false` first ([step 5](#5-deploy-two-passes-on-a-new-account)) |
 | Deploy fails creating `PrimaryOwnerUser` — user already exists | `ownerEmail` passed for a user already in the pool (e.g. created by hand) | Deploy without `ownerEmail` |
 | Stack is in `ROLLBACK_COMPLETE` | The very first deploy failed | Just run `cdk deploy` again — CDK deletes the empty stack and recreates it. Or delete it in the CloudFormation console |
@@ -287,16 +326,22 @@ CloudFormation rolls a **failed** deploy back automatically, so a failed update 
 
 CDK has no "undo"; you roll back by deploying the older code.
 
-1. On GitHub, open the commit or release you want to go back to. Download its zip: **Browse files → Code → Download ZIP**, or `https://github.com/aliflab/mubwem/archive/<commit-sha>.zip`.
-2. Upload it to CloudShell and unzip it as in [Updating to new code](#updating-to-new-code). A commit zip unpacks to `mubwem-<commit-sha>` instead of `mubwem-main`. Create a venv inside it ([step 3.4](#34-install-the-tools)), or move the files over `mubwem-main`.
-3. Before deploying, check what will change:
+**The normal way — revert in git.** On your computer, `git revert <commit-sha>` the bad commit (or commits) and push. Then deploy exactly as in [Updating to new code](#updating-to-new-code). The history keeps both the change and its undo, and the next `git pull` cannot bring the bad code back.
 
-   ```bash
-   cdk diff
-   ```
+**The emergency way — deploy an old commit directly from CloudShell:**
 
-   Look for any DynamoDB table, the user pool or the frontend bucket marked **replace** or **destroy**. All three are set to `DESTROY`, so replacing one **deletes its data** — monitors, history, incidents or user accounts. Do not deploy a rollback that replaces them without a backup ([below](#back-up-the-data-first)).
-4. `cdk deploy`.
+```bash
+cd ~/mubwem && source .venv/bin/activate
+git log --oneline -15          # find the last good commit
+git checkout <commit-sha>
+cd infrastructure
+cdk diff
+cdk deploy
+```
+
+This leaves CloudShell on that old commit. Once a fix is pushed to GitHub, return with `git checkout main && git pull` and deploy again. Until then, do not `git pull` and deploy — that puts the bad code straight back.
+
+Either way, **read `cdk diff` before deploying.** Look for any DynamoDB table, the user pool or the frontend bucket marked **replace** or **destroy**. All three are set to `DESTROY`, so replacing one **deletes its data** — monitors, history, incidents or user accounts. Do not deploy a rollback that replaces them without a backup ([below](#back-up-the-data-first)).
 
 Rolling back code does **not** roll back data. Rows written by the newer version stay in the tables.
 
@@ -337,7 +382,7 @@ Skip this if nothing needs keeping.
 From CloudShell:
 
 ```bash
-cd ~/mubwem-main && source .venv/bin/activate && cd infrastructure
+cd ~/mubwem && source .venv/bin/activate && cd infrastructure
 cdk destroy
 ```
 
@@ -374,7 +419,7 @@ These survive the stack deletion:
 
 ### 4. Clean up CloudShell
 
-**CloudShell → Actions → Delete** wipes the home folder: the code, `.venv` and the saved settings in `.bashrc`.
+**CloudShell → Actions → Delete** wipes the home folder: the code, `.venv`, the CDK CLI and the saved settings in `.bashrc`.
 
 ### 5. Confirm nothing is left
 

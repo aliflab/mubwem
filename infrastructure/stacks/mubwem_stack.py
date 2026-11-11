@@ -423,6 +423,14 @@ class MubwemStack(Stack):
             "", [cognito_domain_prefix, ".auth.", Aws.REGION, ".amazoncognito.com"]
         )
 
+        # Cognito only accepts a prefix domain as the relying party ID once
+        # that domain is attached to the pool, and the domain can only be
+        # created after the pool. So a brand-new deployment goes out first with
+        # `-c passkeys=false`, then a plain redeploy switches passkeys on.
+        passkeys_enabled = (
+            str(self.node.try_get_context("passkeys") or "true").lower() != "false"
+        )
+
         user_pool = cognito.UserPool(
             self,
             "UserPool",
@@ -450,10 +458,12 @@ class MubwemStack(Stack):
             feature_plan=cognito.FeaturePlan.ESSENTIALS,
             sign_in_policy=cognito.SignInPolicy(
                 allowed_first_auth_factors=cognito.AllowedFirstAuthFactors(
-                    password=True, passkey=True
+                    password=True, passkey=passkeys_enabled
                 )
             ),
-            passkey_relying_party_id=passkey_relying_party_id,
+            passkey_relying_party_id=(
+                passkey_relying_party_id if passkeys_enabled else None
+            ),
             # Preferred, not required: the managed login nudges users to
             # register a passkey after a password sign-in, but never blocks
             # someone on a device that cannot hold one.
@@ -546,6 +556,11 @@ class MubwemStack(Stack):
                 username=owner_user.ref,
             )
             owner_link.add_dependency(groups["Owners"])
+            # Later deploys drop ownerEmail, which removes these resources from
+            # the template. Without RETAIN, CloudFormation would delete the
+            # primary Owner and their group membership at that point.
+            owner_user.apply_removal_policy(RemovalPolicy.RETAIN)
+            owner_link.apply_removal_policy(RemovalPolicy.RETAIN)
 
         # ------------------------------------------------------------------
         # Frontend: private S3 bucket behind CloudFront (origin access control)

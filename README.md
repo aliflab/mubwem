@@ -197,7 +197,7 @@ Two self-inflicted lockouts are blocked, both with a 409: an admin cannot disabl
 
 Groups can only be assigned through the admin panel, and reaching it requires already being an Owner or Admin, so the first user has to go straight into `Owners`.
 
-**On a new deployment**, set `ownerEmail` (`-c ownerEmail=you@example.com`, or `MUBWEM_OWNER_EMAIL` in `.env`) for the first `cdk deploy`. The stack creates that user in `Owners`, and Cognito emails them a temporary password. Leave it unset on a stack whose first Owner already exists — creating a user already in the pool fails the deploy.
+**On a new deployment**, set `ownerEmail` (`-c ownerEmail=you@example.com`, or `MUBWEM_OWNER_EMAIL` in `.env`) for the first `cdk deploy`. The stack creates that user in `Owners`, and Cognito emails them a temporary password. Leave it unset on a stack whose first Owner already exists — creating a user already in the pool fails the deploy. Dropping it on later deploys is safe: the Owner resources are `RETAIN`, so removing them from the template leaves the user in place.
 
 That first account is the **primary Owner**: the oldest account in `Owners`, worked out from Cognito on each request rather than stored. Only the primary Owner can create an Owner or promote someone to Owner. If the primary Owner steps down, the next-oldest Owner becomes primary.
 
@@ -264,6 +264,7 @@ cp .env.example .env               # .env is gitignored
 | Region | `MUBWEM_REGION` | `region` | `ap-southeast-2` |
 | Account | `MUBWEM_ACCOUNT` | `account` | `CDK_DEFAULT_ACCOUNT` |
 | Cognito domain prefix | — | `cognitoDomainPrefix` | derived from the stack id |
+| Passkeys on/off | — | `passkeys` | `true` — use `false` for the first deploy to a new account |
 | Check countdown (sec) | — | `scheduleIntervalSec` | derived from `scheduleExpression` |
 
 The hosted-UI domain prefix must be globally unique across all AWS accounts, so it defaults to `mubwem-` plus the first segment of this stack's CloudFormation id. Override with `-c cognitoDomainPrefix=something-unique` for a friendlier login URL — but pick it before anyone registers a passkey, because passkeys are bound to this domain (see [Login](#login)).
@@ -280,8 +281,11 @@ cdk deploy -c alertEmail=you@yourdomain.com -c failureThreshold=3
 cd infrastructure
 cdk bootstrap aws://<YOUR_ACCOUNT_ID>/ap-southeast-2
 cdk synth                          # sanity check, writes nothing to AWS
-cdk deploy
+cdk deploy -c passkeys=false       # first deploy to a new account only
+cdk deploy                         # every deploy after that
 ```
+
+**A new account takes two deploys.** Cognito only accepts the hosted-UI prefix domain as the passkey relying party ID once that domain is attached to the pool, and the domain can only be created after the pool — so creating the pool with passkeys on fails with `RelyingPartyId cannot be reserved domain other than User Pool's prefix domain`. The first deploy creates the pool and domain with passkeys off; the second switches them on.
 
 Deploy prints ten outputs:
 

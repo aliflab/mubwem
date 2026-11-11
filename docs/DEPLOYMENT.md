@@ -4,7 +4,7 @@ A step-by-step runbook for deploying MuBWeM from the GitHub repo into **any** AW
 
 The README's [Deploy](../README.md#deploy) section covers the same deploy from a local terminal. This document is the browser-only path, with every problem hit along the way and its fix.
 
-**Contents** — [Before you start](#before-you-start) · [1. Open CloudShell](#1-open-cloudshell-in-the-target-account) · [2. Prepare CloudShell](#2-prepare-cloudshell-once-per-account) · [3. Get the code](#3-get-the-code) · [4. Bootstrap](#4-bootstrap-cdk-once-per-account-and-region) · [5. Deploy](#5-deploy-two-passes-on-a-new-account) · [6. Confirm emails](#6-confirm-the-emails) · [7. Sign in](#7-sign-in-and-set-up) · [8. Find resources and costs](#8-find-every-mubwem-resource-and-its-cost) · [Updating](#updating-to-new-code) · [Troubleshooting](#troubleshooting) · [Rollback](#rollback) · [Deleting the app](#deleting-the-app)
+**Contents** — [Before you start](#before-you-start) · [1. Open CloudShell](#1-open-cloudshell-in-the-target-account) · [2. Prepare CloudShell](#2-prepare-cloudshell-once-per-account) · [3. Get the code](#3-get-the-code) · [4. Bootstrap](#4-bootstrap-cdk-once-per-account-and-region) · [5. Deploy](#5-deploy-two-passes-on-a-new-account) · [6. Confirm emails](#6-confirm-the-emails) · [7. Sign in](#7-sign-in-and-set-up) · [8. Find resources and costs](#8-find-every-mubwem-resource-and-its-cost) · [Updating](#updating-to-new-code) · [CloudShell was reset](#cloudshell-was-reset) · [Troubleshooting](#troubleshooting) · [Rollback](#rollback) · [Deleting the app](#deleting-the-app)
 
 ---
 
@@ -293,6 +293,66 @@ Before an infrastructure deploy, check `cdk diff` for any DynamoDB table, the us
 `cdk.out` (CDK's build folder) is rebuilt on every deploy. If the home folder runs low, `rm -rf ~/mubwem/infrastructure/cdk.out` is always safe.
 
 If `cdk` fails with `Cloud assembly schema version mismatch` after a `pip install`, the library has moved ahead of the CLI again: `npm install -g aws-cdk && npm cache clean --force`.
+
+---
+
+## CloudShell was reset
+
+CloudShell deletes the home folder after 120 days without being opened, and **Actions → Delete** wipes it on demand. Either way, **the app is not affected.** CloudShell only ever held a copy of the code and the deploy tools; the running app, its monitors, history and users all live in AWS.
+
+What is gone: the `~/mubwem` clone, `.venv`, the CDK CLI, and **the settings saved in `~/.bashrc`**. The settings are the only part that needs care: if `.bashrc` disagrees with what is deployed, the next `cdk deploy` changes the live app to match `.bashrc`.
+
+### 1. Recover the deployed settings
+
+**Lambda → Functions →** the `MubwemStack-CheckerFunction…` function **→ Configuration → Environment variables** shows the live values. Map them back:
+
+| Lambda shows | Set in `.bashrc` as | Needed when |
+|---|---|---|
+| `ALERT_EMAIL` | `MUBWEM_ALERT_EMAIL` | always |
+| `SENDER_EMAIL` | `MUBWEM_SENDER_EMAIL` | it differs from `ALERT_EMAIL` |
+| `FAILURE_THRESHOLD` | `MUBWEM_FAILURE_THRESHOLD` | it is not `3` |
+| `CHECK_TIMEOUT_SEC` | `MUBWEM_CHECK_TIMEOUT_SEC` | it is not `8` |
+| `CHECKS_TTL_DAYS` | `MUBWEM_CHECKS_TTL_DAYS` | it is not `30` |
+| `NOTIFICATIONS_TTL_DAYS` | `MUBWEM_NOTIFICATIONS_TTL_DAYS` | it is not `90` |
+| `DISPLAY_TIMEZONE` | `MUBWEM_DISPLAY_TIMEZONE` | it is not `Australia/Sydney` |
+| `CHECK_REGION` | `MUBWEM_REGION` | it is not `ap-southeast-2` |
+
+Settings the Lambda does not show:
+
+- **Bounce address** (`MUBWEM_BOUNCE_ALERT_EMAIL`) — **SNS → Topics →** `MubwemStack-DeliveryFailureTopic…` **→ Subscriptions** shows the endpoint. Set it only if it differs from the alert email.
+- **Schedule** (`MUBWEM_SCHEDULE_EXPRESSION`, `MUBWEM_SCHEDULE_TIMEZONE`) — **EventBridge → Scheduler → Schedules →** the MuBWeM schedule. Set them only if not `rate(1 minute)` and `Australia/Sydney`.
+- **Login domain** (`cognitoDomainPrefix`) — only if one was set by hand: it is the part before `.auth.` in the `CognitoLoginUrl` output. Pass it as `-c cognitoDomainPrefix=...` on every deploy. Getting this wrong moves the login URL and orphans every passkey.
+
+### 2. Rebuild CloudShell
+
+Follow [section 2](#2-prepare-cloudshell-once-per-account) with the values from step 1, then [section 3](#3-get-the-code). About ten minutes.
+
+**Skip** `cdk bootstrap` — the `CDKToolkit` stack is still in the account — and never pass `-c ownerEmail` or `-c passkeys=false`. Both were for the first deploy only.
+
+### 3. Prove nothing will change
+
+Before deploying any code change:
+
+```bash
+cd ~/mubwem && source .venv/bin/activate && cd infrastructure
+git checkout <commit-sha-last-deployed>    # only if main has moved on since the last deploy
+cdk diff
+```
+
+On the code that is already live, this must say **"There were no differences"**. Anything else means a setting is wrong: fix `.bashrc`, `source ~/.bashrc`, and diff again. Only then `git checkout main` (if you moved off it) and carry on with [Updating to new code](#updating-to-new-code).
+
+If you do not know which commit is live, skip the checkout and read the diff instead: changes that come from new commits are expected; a changed environment variable, email or schedule that no commit touched is a wrong setting.
+
+### Avoiding it
+
+- **Open CloudShell now and then.** Any session resets the 120-day count.
+- **Keep a private copy of the settings** — a password manager or an internal wiki, never this repo, which carries no real email addresses. Print them with:
+
+  ```bash
+  grep MUBWEM ~/.bashrc
+  ```
+
+- **Or deploy from a computer instead.** The README's [Deploy](../README.md#deploy) section does the same thing from a local terminal, with settings kept in a gitignored `.env`.
 
 ---
 

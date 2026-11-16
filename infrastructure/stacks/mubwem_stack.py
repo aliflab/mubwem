@@ -101,6 +101,22 @@ class MubwemStack(Stack):
         if not sender_email or "CHANGE_ME" in str(sender_email):
             sender_email = alert_email
 
+        # Optional: a whole domain verified in SES with Easy DKIM, which the
+        # sender address must belong to. A verified email address alone only
+        # proves the mailbox to AWS; the mail is still DKIM-signed as
+        # amazonses.com, so a From domain with DMARC p=reject (hparsons.com.au)
+        # has it rejected by the receiving server. A domain identity makes SES
+        # sign as the From domain, which is what DMARC checks for.
+        sender_domain = str(self.node.try_get_context("senderDomain") or "")
+        sender_domain = sender_domain.strip().lower()
+        if "CHANGE_ME" in sender_domain:
+            sender_domain = ""
+        if sender_domain and not sender_email.lower().endswith("@" + sender_domain):
+            raise ValueError(
+                f"senderEmail ({sender_email}) must be an address at "
+                f"senderDomain ({sender_domain}), or DKIM will not align"
+            )
+
         # Where SES bounce/complaint notifications land. Same address as the
         # incident alerts by default - it is the same person's problem - but
         # separable, because raw delivery-failure JSON is a different audience
@@ -279,13 +295,52 @@ class MubwemStack(Stack):
         # for anything sent from this address. The checker also names it
         # explicitly on each send; either alone would work, and both together
         # mean a mail cannot slip out untracked.
-        sender_identity = ses.EmailIdentity(
-            self,
-            "AlertSenderIdentity",
-            identity=ses.Identity.email(sender_email),
-            configuration_set=alert_config_set,
-        )
-        if sender_email != alert_email:
+        if sender_domain:
+            # Easy DKIM (RSA 2048) is the default for a domain identity. The
+            # identity stays "pending" until the three CNAMEs in the
+            # SenderDkimRecord outputs are published in the domain's DNS.
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderDomainIdentity",
+                identity=ses.Identity.domain(sender_domain),
+                configuration_set=alert_config_set,
+            )
+            for i in (1, 2, 3):
+                CfnOutput(
+                    self,
+                    f"SenderDkimRecord{i}",
+                    value=Fn.join(
+                        "",
+                        [
+                            getattr(sender_identity, f"dkim_dns_token_name{i}"),
+                            "  CNAME  ",
+                            getattr(sender_identity, f"dkim_dns_token_value{i}"),
+                        ],
+                    ),
+                    description=f"DKIM record {i} of 3 to add to {sender_domain} DNS",
+                )
+            if alert_email.lower().split("@")[-1] != sender_domain:
+                # In the SES sandbox the recipient must stay verified. The
+                # logical ID is kept as "AlertSenderIdentity" on purpose: in
+                # the default setup (sender == alert address) that is the ID
+                # the alert address was already verified under, so switching
+                # to a domain sender leaves it in place. A new ID would make
+                # CloudFormation create a duplicate (which fails) and then
+                # delete the verified one.
+                ses.EmailIdentity(
+                    self,
+                    "AlertSenderIdentity",
+                    identity=ses.Identity.email(alert_email),
+                    configuration_set=alert_config_set,
+                )
+        else:
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderIdentity",
+                identity=ses.Identity.email(sender_email),
+                configuration_set=alert_config_set,
+            )
+        if not sender_domain and sender_email != alert_email:
             # In the SES sandbox the recipient needs verifying too; when the
             # two addresses match the identity above already covers it.
             ses.EmailIdentity(

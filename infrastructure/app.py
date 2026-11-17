@@ -24,6 +24,7 @@ ENV_OVERRIDES = {
     "MUBWEM_ALERT_EMAIL": "alertEmail",
     "MUBWEM_SENDER_EMAIL": "senderEmail",
     "MUBWEM_SENDER_DOMAIN": "senderDomain",
+    "MUBWEM_SENDER_HOSTED_ZONE_ID": "senderHostedZoneId",
     "MUBWEM_BOUNCE_ALERT_EMAIL": "bounceAlertEmail",
     "MUBWEM_OWNER_EMAIL": "ownerEmail",
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",

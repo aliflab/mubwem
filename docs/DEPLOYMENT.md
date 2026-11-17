@@ -319,7 +319,7 @@ What is gone: the `~/mubwem` clone, `.venv`, the CDK CLI, and **the settings sav
 
 Settings the Lambda does not show:
 
-- **Sender domain** (`MUBWEM_SENDER_DOMAIN`) — **SES → Identities** lists a *domain* identity if one is used for sending. Set it to that domain; leaving it unset after it was used deletes the domain identity and alerts bounce on DMARC again.
+- **Sender domain** (`MUBWEM_SENDER_DOMAIN`) — **SES → Identities** lists a *domain* identity if one is used for sending. Set it to that domain; leaving it unset after it was used deletes the domain identity and alerts bounce on DMARC again. If that domain is a **Route 53 → Hosted zones** entry, also set `MUBWEM_SENDER_HOSTED_ZONE_ID` to its zone ID.
 - **Bounce address** (`MUBWEM_BOUNCE_ALERT_EMAIL`) — **SNS → Topics →** `MubwemStack-DeliveryFailureTopic…` **→ Subscriptions** shows the endpoint. Set it only if it differs from the alert email.
 - **Schedule** (`MUBWEM_SCHEDULE_EXPRESSION`, `MUBWEM_SCHEDULE_TIMEZONE`) — **EventBridge → Scheduler → Schedules →** the MuBWeM schedule. Set them only if not `rate(1 minute)` and `Australia/Sydney`.
 - **Login domain** (`cognitoDomainPrefix`) — only if one was set by hand: it is the part before `.auth.` in the `CognitoLoginUrl` output. Pass it as `-c cognitoDomainPrefix=...` on every deploy. Getting this wrong moves the login URL and orphans every passkey.

@@ -48,6 +48,7 @@ from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_route53 as route53
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3_deploy
 from aws_cdk import aws_scheduler as scheduler
@@ -116,6 +117,13 @@ class MubwemStack(Stack):
                 f"senderEmail ({sender_email}) must be an address at "
                 f"senderDomain ({sender_domain}), or DKIM will not align"
             )
+        # Optional: the Route 53 hosted zone ID for senderDomain. With it, CDK
+        # publishes the DKIM and MAIL FROM records itself; without it they are
+        # printed as outputs for adding to DNS by hand.
+        sender_zone_id = str(self.node.try_get_context("senderHostedZoneId") or "")
+        sender_zone_id = sender_zone_id.strip()
+        if sender_zone_id and not sender_domain:
+            raise ValueError("senderHostedZoneId needs senderDomain set too")
 
         # Where SES bounce/complaint notifications land. Same address as the
         # incident alerts by default - it is the same person's problem - but
@@ -295,7 +303,26 @@ class MubwemStack(Stack):
         # for anything sent from this address. The checker also names it
         # explicitly on each send; either alone would work, and both together
         # mean a mail cannot slip out untracked.
-        if sender_domain:
+        if sender_domain and sender_zone_id:
+            # The sending domain is its own Route 53 hosted zone (created by
+            # hand, so its NS records - and the delegation pointing at them -
+            # survive a stack teardown). CDK writes the three Easy DKIM CNAMEs
+            # into it, plus a custom MAIL FROM (MX + SPF) on bounce.<domain>,
+            # so both DKIM and SPF align with the From domain under DMARC.
+            sender_zone = route53.PublicHostedZone.from_hosted_zone_attributes(
+                self,
+                "SenderHostedZone",
+                hosted_zone_id=sender_zone_id,
+                zone_name=sender_domain,
+            )
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderDomainIdentity",
+                identity=ses.Identity.public_hosted_zone(sender_zone),
+                mail_from_domain=f"bounce.{sender_domain}",
+                configuration_set=alert_config_set,
+            )
+        elif sender_domain:
             # Easy DKIM (RSA 2048) is the default for a domain identity. The
             # identity stays "pending" until the three CNAMEs in the
             # SenderDkimRecord outputs are published in the domain's DNS.
@@ -305,6 +332,7 @@ class MubwemStack(Stack):
                 identity=ses.Identity.domain(sender_domain),
                 configuration_set=alert_config_set,
             )
+        if sender_domain and not sender_zone_id:
             for i in (1, 2, 3):
                 CfnOutput(
                     self,
@@ -319,21 +347,21 @@ class MubwemStack(Stack):
                     ),
                     description=f"DKIM record {i} of 3 to add to {sender_domain} DNS",
                 )
-            if alert_email.lower().split("@")[-1] != sender_domain:
-                # In the SES sandbox the recipient must stay verified. The
-                # logical ID is kept as "AlertSenderIdentity" on purpose: in
-                # the default setup (sender == alert address) that is the ID
-                # the alert address was already verified under, so switching
-                # to a domain sender leaves it in place. A new ID would make
-                # CloudFormation create a duplicate (which fails) and then
-                # delete the verified one.
-                ses.EmailIdentity(
-                    self,
-                    "AlertSenderIdentity",
-                    identity=ses.Identity.email(alert_email),
-                    configuration_set=alert_config_set,
-                )
-        else:
+        if sender_domain and alert_email.lower().split("@")[-1] != sender_domain:
+            # In the SES sandbox the recipient must stay verified. The
+            # logical ID is kept as "AlertSenderIdentity" on purpose: in
+            # the default setup (sender == alert address) that is the ID
+            # the alert address was already verified under, so switching
+            # to a domain sender leaves it in place. A new ID would make
+            # CloudFormation create a duplicate (which fails) and then
+            # delete the verified one.
+            ses.EmailIdentity(
+                self,
+                "AlertSenderIdentity",
+                identity=ses.Identity.email(alert_email),
+                configuration_set=alert_config_set,
+            )
+        if not sender_domain:
             sender_identity = ses.EmailIdentity(
                 self,
                 "AlertSenderIdentity",

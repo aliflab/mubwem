@@ -347,6 +347,11 @@ class MubwemStack(Stack):
                     ),
                     description=f"DKIM record {i} of 3 to add to {sender_domain} DNS",
                 )
+        # The alert address's own identity, when the sender identity does not
+        # already cover it. Its ARN is granted to the checker below: in the
+        # SES sandbox, SendEmail is authorised against the recipient identity
+        # as well as the sender.
+        recipient_identity = None
         if sender_domain and alert_email.lower().split("@")[-1] != sender_domain:
             # In the SES sandbox the recipient must stay verified. The
             # logical ID is kept as "AlertSenderIdentity" on purpose: in
@@ -355,7 +360,7 @@ class MubwemStack(Stack):
             # to a domain sender leaves it in place. A new ID would make
             # CloudFormation create a duplicate (which fails) and then
             # delete the verified one.
-            ses.EmailIdentity(
+            recipient_identity = ses.EmailIdentity(
                 self,
                 "AlertSenderIdentity",
                 identity=ses.Identity.email(alert_email),
@@ -371,7 +376,7 @@ class MubwemStack(Stack):
         if not sender_domain and sender_email != alert_email:
             # In the SES sandbox the recipient needs verifying too; when the
             # two addresses match the identity above already covers it.
-            ses.EmailIdentity(
+            recipient_identity = ses.EmailIdentity(
                 self,
                 "AlertRecipientIdentity",
                 identity=ses.Identity.email(alert_email),
@@ -427,23 +432,28 @@ class MubwemStack(Stack):
         # gets an AccessDenied naming the configuration set, which is what
         # happened when ConfigurationSetName was added without touching this.
         #
-        # Both go in one statement rather than two: same action, same effect,
-        # and a single list is harder to extend by half. Anything else the send
-        # starts naming later - a dedicated IP pool, a MAIL FROM identity -
-        # belongs in this list too.
+        # While the account is in the SES sandbox there is a third: the
+        # recipient's identity. Without it the send fails AccessDenied naming
+        # the To address - which is what happened when the sender moved to a
+        # domain identity and the recipient stopped being the same resource.
+        #
+        # All go in one statement rather than several: same action, same
+        # effect, and a single list is harder to extend by half. Anything else
+        # the send starts naming later - a dedicated IP pool - belongs in this
+        # list too.
+        send_resources = [
+            sender_identity.email_identity_arn,
+            self.format_arn(
+                service="ses",
+                resource="configuration-set",
+                resource_name=alert_config_set.configuration_set_name,
+                arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+            ),
+        ]
+        if recipient_identity is not None:
+            send_resources.append(recipient_identity.email_identity_arn)
         checker_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["ses:SendEmail"],
-                resources=[
-                    sender_identity.email_identity_arn,
-                    self.format_arn(
-                        service="ses",
-                        resource="configuration-set",
-                        resource_name=alert_config_set.configuration_set_name,
-                        arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-                    ),
-                ],
-            )
+            iam.PolicyStatement(actions=["ses:SendEmail"], resources=send_resources)
         )
 
         # ------------------------------------------------------------------

@@ -34,6 +34,7 @@ ENV_OVERRIDES = {
     "MUBWEM_DISPLAY_TIMEZONE": "displayTimezone",
     "MUBWEM_REGION": "region",
     "MUBWEM_ACCOUNT": "account",
+    "MUBWEM_INTRANET_ALLOWED_IPS": "intranetAllowedIps",
 }
 
 

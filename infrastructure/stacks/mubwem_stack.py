@@ -13,7 +13,8 @@ Single CDK stack containing the whole Phase 1 (free tier) system:
 
 The dashboard is login-gated by a Cognito user pool (admin-created users
 only, no self-signup). Every route on the HTTP API sits behind the JWT
-authorizer - there is no unauthenticated route anywhere in the system.
+authorizer except GET /intranet/status, a trimmed server-to-server feed
+gated by a shared key held in SSM (checked in the API Lambda).
 
 Access is role based, via four Cognito groups - Owners, Admins, Editors,
 Viewers.
@@ -138,6 +139,13 @@ class MubwemStack(Stack):
             self.node.try_get_context("scheduleIntervalSec")
             or schedule_interval_seconds(schedule_expression)
         )
+        # GET /intranet/status: the shared key lives only in this SSM
+        # SecureString (created by hand, never by CDK, so it is never in the
+        # template or this repo). Optional comma-separated source-IP allowlist.
+        intranet_key_param = (
+            self.node.try_get_context("intranetKeyParam") or "/mubwem/intranet-api-key"
+        )
+        intranet_allowed_ips = str(self.node.try_get_context("intranetAllowedIps") or "")
 
         # ------------------------------------------------------------------
         # DynamoDB tables (all on-demand)
@@ -733,7 +741,24 @@ function handler(event) {
                 "NOTIFICATIONS_TABLE": notifications_table.table_name,
                 "NOTIFICATIONS_TTL_DAYS": str(notifications_ttl_days),
                 "FAILURE_THRESHOLD": str(failure_threshold),
+                "INTRANET_KEY_PARAM": intranet_key_param,
+                "INTRANET_ALLOWED_IPS": intranet_allowed_ips,
             },
+        )
+
+        # Read-only, this one parameter. The default aws/ssm KMS key needs no
+        # extra kms:Decrypt grant when read through SSM.
+        api_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[
+                    self.format_arn(
+                        service="ssm",
+                        resource="parameter",
+                        resource_name=intranet_key_param.lstrip("/"),
+                    )
+                ],
+            )
         )
 
         sites_table.grant_read_data(api_fn)
@@ -804,6 +829,24 @@ function handler(event) {
             ),
             authorizer=dashboard_authorizer,
         )
+
+        # The one route WITHOUT the Cognito authorizer: called server-to-server
+        # by the intranet, which has no Cognito user. The Lambda checks the
+        # x-api-key header (and optional IP allowlist) and fails closed.
+        http_api.add_routes(
+            path="/intranet/status",
+            methods=[apigwv2.HttpMethod.GET],
+            integration=apigw_integrations.HttpLambdaIntegration(
+                "IntranetStatusIntegration", api_fn
+            ),
+        )
+        # Caps what a key-guessing caller can cost; the intranet calls ~1/min.
+        http_api.default_stage.node.default_child.route_settings = {
+            "GET /intranet/status": {
+                "throttlingRateLimit": 2,
+                "throttlingBurstLimit": 5,
+            }
+        }
 
         # ------------------------------------------------------------------
         # Admin Lambda + /admin/* routes
@@ -985,6 +1028,12 @@ function handler(event) {
             "AdminApiUrl",
             value=http_api.api_endpoint + "/admin",
             description="Base path for /admin/users and /admin/sites (JWT required)",
+        )
+        CfnOutput(
+            self,
+            "IntranetStatusUrl",
+            value=http_api.api_endpoint + "/intranet/status",
+            description="Server-to-server status feed; needs the x-api-key header",
         )
         CfnOutput(self, "SitesAdminUrl", value=dashboard_url + "/sites")
         CfnOutput(self, "TeamAdminUrl", value=dashboard_url + "/team")

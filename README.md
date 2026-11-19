@@ -4,7 +4,7 @@
 
 An UptimeRobot-style uptime monitor built on AWS with CDK (Python). It checks a list of sites every minute, records every check, opens and closes incidents, emails you when something goes down or recovers, and serves a static dashboard from CloudFront.
 
-Everything is behind a Cognito login — there is no public or unauthenticated route anywhere. Access is role based: **Owners**, **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI.
+Everything is behind a Cognito login, with one exception: `GET /intranet/status`, a trimmed server-to-server feed for an intranet page, gated by a shared API key held in SSM (see "Intranet status feed" below). Access is role based: **Owners**, **Admins**, **Editors** and **Viewers** are Cognito groups, and an admin panel manages users and sites from the browser instead of the AWS CLI.
 
 This repo is **Phase 1: the free tier test build**. It is a portfolio project — no real company data, and no hardcoded secrets, email addresses or ARNs in committed code.
 
@@ -222,6 +222,15 @@ Then sign out and back in — the group lands in a **new** id token, not the one
 - **Deleting a site does not delete its history.** UptimeChecks and Incidents rows are left orphaned; checks age out on their own TTL.
 
 An earlier build had a per-site `isPublic` flag and an open `GET /public/status` route. Both were removed; nothing reads that flag any more.
+
+### Intranet status feed
+
+`GET /intranet/status` is the only route without the Cognito authorizer. It is meant to be called **server-side** (e.g. from a WordPress shortcode), never from browser JavaScript — a key in a page is a key anyone can copy.
+
+- The key lives only in an SSM SecureString (default name `/mubwem/intranet-api-key`, override with `-c intranetKeyParam=...`). Create it yourself; CDK never sees its value, so it is not in the template or this repo. Rotate it by overwriting the parameter — the Lambda re-reads it within 5 minutes.
+- Callers send it as the `x-api-key` header. No parameter, an SSM error, or a wrong/missing key all fail closed (503/401).
+- Optional `MUBWEM_INTRANET_ALLOWED_IPS` (comma-separated, in `.env`) also pins the caller's source IP (403 otherwise).
+- It returns only displayed sites' name, status, 24h uptime and hourly buckets — no URLs, incidents or emails — cached 60s in the Lambda, and the route is throttled to 2 req/s.
 
 ---
 

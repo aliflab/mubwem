@@ -7,6 +7,26 @@ sit behind the Cognito JWT authorizer; there is no unauthenticated route:
   GET /status/{siteId}         one site, with full detail
   GET /notifications           the bell's feed of incident opens and closes
 
+plus one route with no Cognito authorizer, for a server-to-server caller (the
+intranet's WordPress server):
+
+  GET /intranet/status         trimmed list, gated by the x-api-key header
+
+INTRANET RESPONSE (GET /intranet/status)
+
+{
+  "generatedAt": "...",
+  "sites": [   # displayed sites only, same down-first order as /status
+    {"name": "Example Home", "status": "up", "uptime24h": 99.86 | null,
+     "hourlyBuckets": [...24...]}
+  ]
+}
+
+The key is never in this repo or in the Lambda's environment: it is an SSM
+SecureString (INTRANET_KEY_PARAM) read at runtime. Missing parameter, SSM
+error, or no/wrong header all answer 401/503 - the route fails closed. If
+INTRANET_ALLOWED_IPS is set, the caller's source IP must also be in it.
+
 The list route returns everything the dashboard needs in one call, so the
 frontend does no joining of its own.
 
@@ -134,15 +154,16 @@ Rows are written by the checker with a TTL of `retentionDays`. DynamoDB
 deletes expired rows lazily (often days late), so this route also filters on
 createdAt itself - nothing older than the window is ever returned.
 
-There is no visibility filtering of any kind in this file: every caller has
-already been authenticated by the API Gateway authorizer, so every caller
-sees every site. A site that does not exist is a 404 on the detail route.
+Apart from /intranet/status, every caller has already been authenticated by
+the API Gateway authorizer, so every caller sees every site. A site that does not exist is a 404 on the detail route.
 """
 
+import hmac
 import json
 import logging
 import math
 import os
+import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -181,6 +202,18 @@ MAX_DETAIL_POINTS = 500
 # siteId from rawPath when pathParameters is absent.
 LIST_PATH = "/status"
 NOTIFICATIONS_PATH = "/notifications"
+INTRANET_PATH = "/intranet/status"
+
+INTRANET_KEY_PARAM = os.environ.get("INTRANET_KEY_PARAM", "")
+INTRANET_ALLOWED_IPS = {
+    ip.strip() for ip in os.environ.get("INTRANET_ALLOWED_IPS", "").split(",") if ip.strip()
+}
+# Re-read the key this often, so rotating it in SSM needs no redeploy.
+INTRANET_KEY_TTL_SEC = 300
+# The intranet caches too; this caps DynamoDB reads however often it is called.
+INTRANET_PAYLOAD_TTL_SEC = 60
+_intranet_key = {"value": None, "at": 0.0}
+_intranet_payload = {"value": None, "at": 0.0}
 
 _dynamodb = boto3.resource(
     "dynamodb", config=Config(retries={"max_attempts": 3, "mode": "standard"})
@@ -688,16 +721,80 @@ def _route_path(event):
     return (raw or "").rstrip("/")
 
 
-def _response(status_code, body):
+def _response(status_code, body, cache_control="public, max-age=10"):
     return {
         "statusCode": status_code,
         "headers": {
             "content-type": "application/json",
             # Dashboard polls every 20s; a short cache absorbs refresh bursts.
-            "cache-control": "public, max-age=10",
+            "cache-control": cache_control,
         },
         "body": json.dumps(body, default=str),
     }
+
+
+def _load_intranet_key():
+    """The shared key from SSM, cached for INTRANET_KEY_TTL_SEC. None if unset."""
+    now = time.monotonic()
+    if _intranet_key["value"] and now - _intranet_key["at"] < INTRANET_KEY_TTL_SEC:
+        return _intranet_key["value"]
+    if not INTRANET_KEY_PARAM:
+        return None
+    resp = boto3.client("ssm").get_parameter(Name=INTRANET_KEY_PARAM, WithDecryption=True)
+    _intranet_key.update(value=resp["Parameter"]["Value"], at=now)
+    return _intranet_key["value"]
+
+
+def build_intranet_payload():
+    """Displayed sites only, stripped to what a staff status board needs."""
+    now = time.monotonic()
+    if _intranet_payload["value"] and now - _intranet_payload["at"] < INTRANET_PAYLOAD_TTL_SEC:
+        return _intranet_payload["value"]
+    full = build_payload()
+    payload = {
+        "generatedAt": full["generatedAt"],
+        "sites": [
+            {
+                "name": e["name"],
+                "status": e["status"],
+                "uptime24h": e["uptime24h"],
+                "hourlyBuckets": e["hourlyBuckets"],
+            }
+            for e in full["sites"]
+            if e["showOnDashboard"]
+        ],
+    }
+    _intranet_payload.update(value=payload, at=now)
+    return payload
+
+
+def handle_intranet(event):
+    """No Cognito authorizer on this route, so everything here fails closed."""
+    nocache = "no-store"
+    source_ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp")
+    if INTRANET_ALLOWED_IPS and source_ip not in INTRANET_ALLOWED_IPS:
+        logger.warning("Intranet call from disallowed IP %s", source_ip)
+        return _response(403, {"error": "forbidden"}, nocache)
+
+    try:
+        expected = _load_intranet_key()
+    except Exception:  # noqa: BLE001 - no key means nobody gets in
+        logger.exception("Could not read intranet API key from SSM")
+        return _response(503, {"error": "unavailable"}, nocache)
+    if not expected:
+        return _response(503, {"error": "unavailable"}, nocache)
+
+    headers = {str(k).lower(): v for k, v in (event.get("headers") or {}).items()}
+    supplied = headers.get("x-api-key") or ""
+    if not hmac.compare_digest(supplied.encode(), expected.encode()):
+        logger.warning("Intranet call with missing/invalid key from %s", source_ip)
+        return _response(401, {"error": "unauthorized"}, nocache)
+
+    try:
+        return _response(200, build_intranet_payload(), nocache)
+    except Exception:  # noqa: BLE001 - always answer with JSON
+        logger.exception("Failed to build intranet payload")
+        return _response(500, {"error": "internal error"}, nocache)
 
 
 def _site_id_from(event):
@@ -724,6 +821,9 @@ def _site_id_from(event):
 
 
 def lambda_handler(event, context):  # noqa: ARG001 - signature fixed by Lambda
+    if isinstance(event, dict) and _route_path(event) == INTRANET_PATH:
+        return handle_intranet(event)
+
     if isinstance(event, dict) and _route_path(event) == NOTIFICATIONS_PATH:
         try:
             params = event.get("queryStringParameters") or {}

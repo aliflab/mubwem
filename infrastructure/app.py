@@ -23,6 +23,8 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ENV_OVERRIDES = {
     "MUBWEM_ALERT_EMAIL": "alertEmail",
     "MUBWEM_SENDER_EMAIL": "senderEmail",
+    "MUBWEM_SENDER_DOMAIN": "senderDomain",
+    "MUBWEM_SENDER_HOSTED_ZONE_ID": "senderHostedZoneId",
     "MUBWEM_BOUNCE_ALERT_EMAIL": "bounceAlertEmail",
     "MUBWEM_OWNER_EMAIL": "ownerEmail",
     "MUBWEM_FAILURE_THRESHOLD": "failureThreshold",
@@ -77,11 +79,15 @@ region = app.node.try_get_context("region") or os.environ.get(
 )
 account = app.node.try_get_context("account") or os.environ.get("CDK_DEFAULT_ACCOUNT")
 
-MubwemStack(
+stack = MubwemStack(
     app,
     "MubwemStack",
     env=cdk.Environment(account=account, region=region),
     description="MuBWeM - Multi-Brand Website Monitor (Phase 1 test build)",
 )
+
+# One label on every taggable resource, for Tag Editor, Resource Groups and
+# (once activated as a cost allocation tag in Billing) Cost Explorer.
+cdk.Tags.of(stack).add("project", "mubwem")
 
 app.synth()

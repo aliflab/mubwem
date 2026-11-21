@@ -49,6 +49,7 @@ from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_route53 as route53
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as s3_deploy
 from aws_cdk import aws_scheduler as scheduler
@@ -101,6 +102,29 @@ class MubwemStack(Stack):
         sender_email = self.node.try_get_context("senderEmail")
         if not sender_email or "CHANGE_ME" in str(sender_email):
             sender_email = alert_email
+
+        # Optional: a whole domain verified in SES with Easy DKIM, which the
+        # sender address must belong to. A verified email address alone only
+        # proves the mailbox to AWS; the mail is still DKIM-signed as
+        # amazonses.com, so a From domain with DMARC p=reject (hparsons.com.au)
+        # has it rejected by the receiving server. A domain identity makes SES
+        # sign as the From domain, which is what DMARC checks for.
+        sender_domain = str(self.node.try_get_context("senderDomain") or "")
+        sender_domain = sender_domain.strip().lower()
+        if "CHANGE_ME" in sender_domain:
+            sender_domain = ""
+        if sender_domain and not sender_email.lower().endswith("@" + sender_domain):
+            raise ValueError(
+                f"senderEmail ({sender_email}) must be an address at "
+                f"senderDomain ({sender_domain}), or DKIM will not align"
+            )
+        # Optional: the Route 53 hosted zone ID for senderDomain. With it, CDK
+        # publishes the DKIM and MAIL FROM records itself; without it they are
+        # printed as outputs for adding to DNS by hand.
+        sender_zone_id = str(self.node.try_get_context("senderHostedZoneId") or "")
+        sender_zone_id = sender_zone_id.strip()
+        if sender_zone_id and not sender_domain:
+            raise ValueError("senderHostedZoneId needs senderDomain set too")
 
         # Where SES bounce/complaint notifications land. Same address as the
         # incident alerts by default - it is the same person's problem - but
@@ -287,16 +311,80 @@ class MubwemStack(Stack):
         # for anything sent from this address. The checker also names it
         # explicitly on each send; either alone would work, and both together
         # mean a mail cannot slip out untracked.
-        sender_identity = ses.EmailIdentity(
-            self,
-            "AlertSenderIdentity",
-            identity=ses.Identity.email(sender_email),
-            configuration_set=alert_config_set,
-        )
-        if sender_email != alert_email:
+        if sender_domain and sender_zone_id:
+            # The sending domain is its own Route 53 hosted zone (created by
+            # hand, so its NS records - and the delegation pointing at them -
+            # survive a stack teardown). CDK writes the three Easy DKIM CNAMEs
+            # into it, plus a custom MAIL FROM (MX + SPF) on bounce.<domain>,
+            # so both DKIM and SPF align with the From domain under DMARC.
+            sender_zone = route53.PublicHostedZone.from_hosted_zone_attributes(
+                self,
+                "SenderHostedZone",
+                hosted_zone_id=sender_zone_id,
+                zone_name=sender_domain,
+            )
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderDomainIdentity",
+                identity=ses.Identity.public_hosted_zone(sender_zone),
+                mail_from_domain=f"bounce.{sender_domain}",
+                configuration_set=alert_config_set,
+            )
+        elif sender_domain:
+            # Easy DKIM (RSA 2048) is the default for a domain identity. The
+            # identity stays "pending" until the three CNAMEs in the
+            # SenderDkimRecord outputs are published in the domain's DNS.
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderDomainIdentity",
+                identity=ses.Identity.domain(sender_domain),
+                configuration_set=alert_config_set,
+            )
+        if sender_domain and not sender_zone_id:
+            for i in (1, 2, 3):
+                CfnOutput(
+                    self,
+                    f"SenderDkimRecord{i}",
+                    value=Fn.join(
+                        "",
+                        [
+                            getattr(sender_identity, f"dkim_dns_token_name{i}"),
+                            "  CNAME  ",
+                            getattr(sender_identity, f"dkim_dns_token_value{i}"),
+                        ],
+                    ),
+                    description=f"DKIM record {i} of 3 to add to {sender_domain} DNS",
+                )
+        # The alert address's own identity, when the sender identity does not
+        # already cover it. Its ARN is granted to the checker below: in the
+        # SES sandbox, SendEmail is authorised against the recipient identity
+        # as well as the sender.
+        recipient_identity = None
+        if sender_domain and alert_email.lower().split("@")[-1] != sender_domain:
+            # In the SES sandbox the recipient must stay verified. The
+            # logical ID is kept as "AlertSenderIdentity" on purpose: in
+            # the default setup (sender == alert address) that is the ID
+            # the alert address was already verified under, so switching
+            # to a domain sender leaves it in place. A new ID would make
+            # CloudFormation create a duplicate (which fails) and then
+            # delete the verified one.
+            recipient_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderIdentity",
+                identity=ses.Identity.email(alert_email),
+                configuration_set=alert_config_set,
+            )
+        if not sender_domain:
+            sender_identity = ses.EmailIdentity(
+                self,
+                "AlertSenderIdentity",
+                identity=ses.Identity.email(sender_email),
+                configuration_set=alert_config_set,
+            )
+        if not sender_domain and sender_email != alert_email:
             # In the SES sandbox the recipient needs verifying too; when the
             # two addresses match the identity above already covers it.
-            ses.EmailIdentity(
+            recipient_identity = ses.EmailIdentity(
                 self,
                 "AlertRecipientIdentity",
                 identity=ses.Identity.email(alert_email),
@@ -352,23 +440,28 @@ class MubwemStack(Stack):
         # gets an AccessDenied naming the configuration set, which is what
         # happened when ConfigurationSetName was added without touching this.
         #
-        # Both go in one statement rather than two: same action, same effect,
-        # and a single list is harder to extend by half. Anything else the send
-        # starts naming later - a dedicated IP pool, a MAIL FROM identity -
-        # belongs in this list too.
+        # While the account is in the SES sandbox there is a third: the
+        # recipient's identity. Without it the send fails AccessDenied naming
+        # the To address - which is what happened when the sender moved to a
+        # domain identity and the recipient stopped being the same resource.
+        #
+        # All go in one statement rather than several: same action, same
+        # effect, and a single list is harder to extend by half. Anything else
+        # the send starts naming later - a dedicated IP pool - belongs in this
+        # list too.
+        send_resources = [
+            sender_identity.email_identity_arn,
+            self.format_arn(
+                service="ses",
+                resource="configuration-set",
+                resource_name=alert_config_set.configuration_set_name,
+                arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+            ),
+        ]
+        if recipient_identity is not None:
+            send_resources.append(recipient_identity.email_identity_arn)
         checker_fn.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=["ses:SendEmail"],
-                resources=[
-                    sender_identity.email_identity_arn,
-                    self.format_arn(
-                        service="ses",
-                        resource="configuration-set",
-                        resource_name=alert_config_set.configuration_set_name,
-                        arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-                    ),
-                ],
-            )
+            iam.PolicyStatement(actions=["ses:SendEmail"], resources=send_resources)
         )
 
         # ------------------------------------------------------------------
@@ -431,6 +524,14 @@ class MubwemStack(Stack):
             "", [cognito_domain_prefix, ".auth.", Aws.REGION, ".amazoncognito.com"]
         )
 
+        # Cognito only accepts a prefix domain as the relying party ID once
+        # that domain is attached to the pool, and the domain can only be
+        # created after the pool. So a brand-new deployment goes out first with
+        # `-c passkeys=false`, then a plain redeploy switches passkeys on.
+        passkeys_enabled = (
+            str(self.node.try_get_context("passkeys") or "true").lower() != "false"
+        )
+
         user_pool = cognito.UserPool(
             self,
             "UserPool",
@@ -458,10 +559,12 @@ class MubwemStack(Stack):
             feature_plan=cognito.FeaturePlan.ESSENTIALS,
             sign_in_policy=cognito.SignInPolicy(
                 allowed_first_auth_factors=cognito.AllowedFirstAuthFactors(
-                    password=True, passkey=True
+                    password=True, passkey=passkeys_enabled
                 )
             ),
-            passkey_relying_party_id=passkey_relying_party_id,
+            passkey_relying_party_id=(
+                passkey_relying_party_id if passkeys_enabled else None
+            ),
             # Preferred, not required: the managed login nudges users to
             # register a passkey after a password sign-in, but never blocks
             # someone on a device that cannot hold one.
@@ -554,6 +657,11 @@ class MubwemStack(Stack):
                 username=owner_user.ref,
             )
             owner_link.add_dependency(groups["Owners"])
+            # Later deploys drop ownerEmail, which removes these resources from
+            # the template. Without RETAIN, CloudFormation would delete the
+            # primary Owner and their group membership at that point.
+            owner_user.apply_removal_policy(RemovalPolicy.RETAIN)
+            owner_link.apply_removal_policy(RemovalPolicy.RETAIN)
 
         # ------------------------------------------------------------------
         # Frontend: private S3 bucket behind CloudFront (origin access control)
